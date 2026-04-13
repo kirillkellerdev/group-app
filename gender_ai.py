@@ -4,6 +4,7 @@
 import os
 import re
 from typing import Literal, Optional, Tuple
+from urllib.parse import quote
 import requests
 
 Gender = Literal["M", "F"]
@@ -14,8 +15,9 @@ def get_namsor_api_key() -> str:
     return os.getenv("NAMSOR_API_KEY", "")
 
 
-# Namsor API configuration
-NAMSOR_API_URL = "https://api.namsor.com/api/gender/full"
+# Namsor API v2 configuration - correct endpoint based on official documentation
+# https://namsor.app/api-documentation/gender-api
+NAMSOR_API_BASE_URL = "https://v2.namsor.com/NamSorAPIv2/api2/json/genderFull"
 
 
 def extract_first_name(name: str) -> str:
@@ -44,13 +46,17 @@ def detect_gender_by_namsor(name: str) -> Tuple[Optional[Gender], Optional[str],
     """
     api_key = get_namsor_api_key()
     
+    # URL-encode the name for the REST-style API endpoint
+    encoded_name = quote(name)
+    api_url = f"{NAMSOR_API_BASE_URL}/{encoded_name}"
+    
     # Always initialize request_details structure
     request_details = {
         "request": {
-            "url": NAMSOR_API_URL,
-            "method": "POST",
-            "headers": {"X-API-Key": api_key if api_key else "(empty)", "Content-Type": "application/json"},
-            "payload": {"name": name}
+            "url": api_url,
+            "method": "GET",
+            "headers": {"X-API-Key": api_key if api_key else "(empty)", "Accept": "application/json"},
+            "payload": None  # GET request has no payload
         },
         "response": {}
     }
@@ -61,15 +67,11 @@ def detect_gender_by_namsor(name: str) -> Tuple[Optional[Gender], Optional[str],
     
     headers = {
         "X-API-Key": api_key,
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "name": name
+        "Accept": "application/json"
     }
     
     try:
-        response = requests.post(NAMSOR_API_URL, json=payload, headers=headers, timeout=10)
+        response = requests.get(api_url, headers=headers, timeout=10)
         
         request_details["response"] = {
             "status_code": response.status_code,
@@ -79,15 +81,15 @@ def detect_gender_by_namsor(name: str) -> Tuple[Optional[Gender], Optional[str],
         response.raise_for_status()
         data = response.json()
         
-        # Namsor returns gender as "male" or "female"
-        gender_result = data.get("gender", "").lower()
+        # Namsor v2 API returns likelyGender as "male" or "female"
+        gender_result = data.get("likelyGender", "").lower()
         
         if gender_result == "male":
             return ("M", f"✅ Namsor: male", request_details)
         elif gender_result == "female":
             return ("F", f"✅ Namsor: female", request_details)
         else:
-            return (None, f"⚠️ Namsor: неизвестный пол ({data.get('gender', 'N/A')})", request_details)
+            return (None, f"⚠️ Namsor: неизвестный пол ({data.get('likelyGender', 'N/A')})", request_details)
             
     except requests.exceptions.Timeout:
         request_details["response"]["error"] = "Таймаут запроса"
@@ -125,12 +127,15 @@ def detect_gender(name: str) -> Tuple[Gender, bool, str, dict]:
     api_key = get_namsor_api_key()
     
     # Initialize request_details even if API key is missing
+    encoded_name = quote(extract_first_name(name))
+    api_url = f"{NAMSOR_API_BASE_URL}/{encoded_name}"
+    
     request_details = {
         "request": {
-            "url": NAMSOR_API_URL,
-            "method": "POST",
-            "headers": {"X-API-Key": api_key if api_key else "(empty)", "Content-Type": "application/json"},
-            "payload": {"name": extract_first_name(name)}
+            "url": api_url,
+            "method": "GET",
+            "headers": {"X-API-Key": api_key if api_key else "(empty)", "Accept": "application/json"},
+            "payload": None
         },
         "response": {"error": "API ключ не настроен"}
     }
