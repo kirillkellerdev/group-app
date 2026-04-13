@@ -1,172 +1,297 @@
 # app.py
+"""Streamlit application for balanced group distribution."""
+
 import sys
 import os
+import io
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
 import pandas as pd
-import io
-from names_db import detect_gender, _RU_NAMES
+from names_db import detect_gender, RU_NAMES, is_name_recognized
 from generator import generate_groups
 
+# Page configuration
 st.set_page_config(page_title="РАСХОДИМСЯ ПО ГРУППАМ!", layout="wide")
 st.title("🔥 РАСХОДИМСЯ ПО ГРУППАМ!")
 
+# Constants
 DATA_KEY = "residents_data"
 WIDGET_KEY = "residents_widget"
-COLUMNS = ["Имя", "Пол", "Роль", "🚦 Статус"]
+DEFAULT_COLUMNS = ["Имя", "Пол", "Роль", "🚦 Статус"]
+ROLE_OPTIONS = ["Обычный", "ВПИ", "Новичок"]
+GENDER_OPTIONS = ["M", "F"]
 
-# 🛡 1. Инициализация (гарантирует DataFrame)
-if DATA_KEY not in st.session_state or not isinstance(st.session_state.get(DATA_KEY), pd.DataFrame):
-    st.session_state[DATA_KEY] = pd.DataFrame(columns=COLUMNS)
 
-# 🔄 2. Миграция ролей (1 раз)
-def migrate_roles():
+def initialize_session_state() -> None:
+    """Initialize session state with default DataFrame if not present."""
+    if DATA_KEY not in st.session_state or not isinstance(
+        st.session_state.get(DATA_KEY), pd.DataFrame
+    ):
+        st.session_state[DATA_KEY] = pd.DataFrame(columns=DEFAULT_COLUMNS)
+
+
+def migrate_roles() -> bool:
+    """Migrate old role names to new Russian names. Returns True if migration occurred."""
     df = st.session_state[DATA_KEY]
-    if df.empty or "Роль" not in df.columns: return False
-    if df["Роль"].isin(["regular", "expert", "newbie"]).any():
-        df["Роль"] = df["Роль"].replace({"regular": "Обычный", "expert": "ВПИ", "newbie": "Новичок"})
+    if df.empty or "Роль" not in df.columns:
+        return False
+    
+    role_mapping = {"regular": "Обычный", "expert": "ВПИ", "newbie": "Новичок"}
+    if df["Роль"].isin(role_mapping.keys()).any():
+        df["Роль"] = df["Роль"].replace(role_mapping)
         st.session_state[DATA_KEY] = df.copy()
-        if WIDGET_KEY in st.session_state: del st.session_state[WIDGET_KEY]
+        if WIDGET_KEY in st.session_state:
+            del st.session_state[WIDGET_KEY]
         return True
     return False
 
-if migrate_roles(): st.rerun()
 
-# 📖 Хелпер чтения (Виджет -> Хранилище -> Пустая)
-def get_current_df():
-    if WIDGET_KEY in st.session_state and isinstance(st.session_state[WIDGET_KEY], pd.DataFrame):
+def get_current_dataframe() -> pd.DataFrame:
+    """Get current dataframe from widget or session state."""
+    if WIDGET_KEY in st.session_state and isinstance(
+        st.session_state[WIDGET_KEY], pd.DataFrame
+    ):
         return st.session_state[WIDGET_KEY]
-    return st.session_state.get(DATA_KEY, pd.DataFrame(columns=COLUMNS))
+    return st.session_state.get(DATA_KEY, pd.DataFrame(columns=DEFAULT_COLUMNS))
 
-# 3. Массовая вставка
-with st.expander("📋 Массовое добавление резидентов", expanded=True):
-    bulk_text = st.text_area("Вставьте список имён (каждое с новой строки)", height=80)
-    if st.button("➕ Добавить в таблицу", width="stretch"):
-        names = [n.strip() for n in bulk_text.splitlines() if n.strip()]
-        if names:
-            df = get_current_df()
-            existing = set(df["Имя"].dropna().str.strip().tolist())
-            unique_names = list(dict.fromkeys(names))
-            to_add = [n for n in unique_names if n not in existing]
-            if to_add:
-                genders, statuses = [], []
-                for n in to_add:
-                    first = n.strip().split()[0].lower().rstrip('.,!?:;')
-                    genders.append(detect_gender(n))
-                    statuses.append("✅" if first in _RU_NAMES else "🔴 Не определён")
-                new_rows = pd.DataFrame({"Имя": to_add, "Пол": genders, "Роль": "Обычный", "🚦 Статус": statuses})
-                st.session_state[DATA_KEY] = pd.concat([df, new_rows], ignore_index=True)
-                if WIDGET_KEY in st.session_state: del st.session_state[WIDGET_KEY]
-                st.success(f"✅ Добавлено: {len(to_add)}")
+
+def add_bulk_names(names_text: str) -> tuple[bool, str]:
+    """Add multiple names from text input.
+    
+    Returns:
+        Tuple of (success, message)
+    """
+    names = [n.strip() for n in names_text.splitlines() if n.strip()]
+    if not names:
+        return False, "Введите имена для добавления."
+    
+    df = get_current_dataframe()
+    existing_names = set(df["Имя"].dropna().str.strip().tolist())
+    unique_names = list(dict.fromkeys(names))
+    to_add = [n for n in unique_names if n not in existing_names]
+    
+    if not to_add:
+        return False, "Все имена уже есть в таблице."
+    
+    # Detect genders and statuses
+    genders = []
+    statuses = []
+    for name in to_add:
+        genders.append(detect_gender(name))
+        first_word = name.strip().split()[0].lower().rstrip('.,!?:;')
+        statuses.append("✅" if is_name_recognized(first_word) else "🔴 Не определён")
+    
+    new_rows = pd.DataFrame({
+        "Имя": to_add,
+        "Пол": genders,
+        "Роль": "Обычный",
+        "🚦 Статус": statuses
+    })
+    
+    st.session_state[DATA_KEY] = pd.concat([df, new_rows], ignore_index=True)
+    if WIDGET_KEY in st.session_state:
+        del st.session_state[WIDGET_KEY]
+    
+    return True, f"✅ Добавлено: {len(to_add)}"
+
+
+def auto_detect_genders() -> None:
+    """Auto-detect gender for all participants."""
+    df = get_current_dataframe().copy()
+    if df.empty:
+        return
+    
+    df["Пол"] = df["Имя"].astype(str).apply(detect_gender)
+    df["🚦 Статус"] = df["Имя"].apply(
+        lambda n: "✅" if is_name_recognized(n.strip().split()[0].lower().rstrip('.,!?:;')) else "🔴 Не определён"
+    )
+    
+    st.session_state[DATA_KEY] = df
+    if WIDGET_KEY in st.session_state:
+        del st.session_state[WIDGET_KEY]
+
+
+def parse_limits(limits_text: str) -> dict[str, list[str]]:
+    """Parse limits from text input.
+    
+    Format: "Name: Other1, Other2" per line
+    """
+    limits = {}
+    for line in limits_text.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key_clean = key.strip()
+        if not key_clean:
+            continue
+        limits[key_clean] = [x.strip() for x in value.split(',') if x.strip()]
+    return limits
+
+
+def create_export_dataframe(groups: list[list[str]]) -> pd.DataFrame:
+    """Create DataFrame for Excel export with equal-length columns."""
+    max_len = max(len(g) for g in groups) if groups else 0
+    export_data = {}
+    
+    for i, group in enumerate(groups, 1):
+        col_name = f"Группа {i} ({len(group)} чел.)"
+        export_data[col_name] = group + [""] * (max_len - len(group))
+    
+    return pd.DataFrame(export_data)
+
+
+def render_resident_table() -> pd.DataFrame:
+    """Render the resident data editor table."""
+    st.subheader("📝 Резиденты")
+    
+    return st.data_editor(
+        st.session_state[DATA_KEY].copy(),
+        key=WIDGET_KEY,
+        column_config={
+            "Имя": st.column_config.TextColumn("Имя", required=True),
+            "Пол": st.column_config.SelectboxColumn(
+                "Пол", options=GENDER_OPTIONS, required=True, default="M"
+            ),
+            "Роль": st.column_config.SelectboxColumn(
+                "Роль", options=ROLE_OPTIONS, required=True, default="Обычный"
+            ),
+            "🚦 Статус": st.column_config.TextColumn("Статус", width="small", disabled=True),
+        },
+        hide_index=True,
+        width="stretch",
+        num_rows="dynamic"
+    )
+
+
+def render_generation_settings() -> dict:
+    """Render generation settings and return values."""
+    with st.expander("⚙️ Настройки генерации"):
+        return {
+            "num_groups": st.number_input("Количество групп", min_value=1, value=2),
+            "strict_roles": st.checkbox("Строгий баланс ролей", value=True),
+            "strict_genders": st.checkbox("Строгий баланс полов", value=True),
+            "seed": st.number_input("Seed (опционально)", value=None, step=1),
+        }
+
+
+def main():
+    """Main application entry point."""
+    # Initialize session state
+    initialize_session_state()
+    
+    # Run role migration if needed
+    if migrate_roles():
+        st.rerun()
+    
+    # Bulk import section
+    with st.expander("📋 Массовое добавление резидентов", expanded=True):
+        bulk_text = st.text_area(
+            "Вставьте список имён (каждое с новой строки)", height=80
+        )
+        if st.button("➕ Добавить в таблицу", width="stretch"):
+            success, message = add_bulk_names(bulk_text)
+            if success:
+                st.success(message)
                 st.rerun()
             else:
-                st.warning("Все имена уже есть в таблице.")
-
-# 4. Авто-определение пола
-if st.button("🔍 Авто-определить пол у всех", type="secondary", width="stretch"):
-    df = get_current_df().copy()
-    if not df.empty:
-        df["Пол"] = df["Имя"].astype(str).apply(detect_gender)
-        df["🚦 Статус"] = df["Имя"].apply(lambda n: "✅" if n.strip().split()[0].lower().rstrip('.,!?:;') in _RU_NAMES else "🔴 Не определён")
-        st.session_state[DATA_KEY] = df
-        if WIDGET_KEY in st.session_state: del st.session_state[WIDGET_KEY]
-        st.rerun()
-
-# 5. Предупреждение
-current_df = st.session_state[DATA_KEY]
-if "🚦 Статус" in current_df.columns:
-    undetected = current_df[current_df["🚦 Статус"].str.contains("🔴", na=False)]
-    if not undetected.empty:
-        st.warning(f"🔴 Проверьте вручную: {', '.join(undetected['Имя'])}")
-
-# 6. Таблица резидентов (СТАБИЛЬНЫЙ РЕЖИМ)
-st.subheader("📝 Резиденты")
-
-# Передаём копию, чтобы обойти StreamlitValueAssignmentNotAllowedError
-# Key гарантирует сохранение состояния между ререндерами
-editor_df = st.data_editor(
-    st.session_state[DATA_KEY].copy(),
-    key=WIDGET_KEY,
-    column_config={
-        "Имя": st.column_config.TextColumn("Имя", required=True),
-        "Пол": st.column_config.SelectboxColumn("Пол", options=["M", "F"], required=True, default="M"),
-        "Роль": st.column_config.SelectboxColumn("Роль", options=["Обычный", "ВПИ", "Новичок"], required=True, default="Обычный"),
-        "🚦 Статус": st.column_config.TextColumn("Статус", width="small", disabled=True),
-    },
-    hide_index=True,
-    width="stretch",
-    num_rows="dynamic"
-)
-
-# 7. Границы
-st.subheader("🌍 Границы")
-limits_txt = st.text_area(
-    "Укажите, кто не должен быть в одной группе (Имя: Через запятую)",
-    placeholder="Олег С: Леша Ч, Иван П\nАня К: Петя О, Маша И",
-    height=240
-)
-
-# 8. Настройки
-with st.expander("⚙️ Настройки генерации"):
-    n = st.number_input("Количество групп", min_value=1, value=2)
-    strict_r = st.checkbox("Строгий баланс ролей", value=True)
-    strict_g = st.checkbox("Строгий баланс полов", value=True)
-    seed = st.number_input("Seed (опционально)", value=None, step=1)
-
-# 9. Генерация
-st.markdown("---")
-run = st.button("🚀 РАСПРЕДЕЛИТЬ!", type="primary", width="stretch")
-
-if run:
-    # Берём актуальное состояние напрямую из виджета
-    df = editor_df
-    if "Имя" not in df.columns or df.empty:
-        st.error("Таблица пуста. Добавьте резидентов.")
-        st.stop()
-        
-    valid_df = df.dropna(subset=["Имя"])
-    names = valid_df["Имя"].str.strip().tolist()
-    if len(set(names)) != len(names):
-        st.error("В таблице есть дубликаты имён.")
-        st.stop()
-        
-    genders = dict(zip(valid_df["Имя"].str.strip(), valid_df["Пол"]))
-    newbies = valid_df[valid_df["Роль"]=="Новичок"]["Имя"].str.strip().tolist()
-    experts = valid_df[valid_df["Роль"]=="ВПИ"]["Имя"].str.strip().tolist()
+                st.warning(message)
     
-    limits = {}
-    for line in limits_txt.splitlines():
-        if ":" in line:
-            k, v = line.split(":", 1)
-            k_clean = k.strip()
-            if not k_clean: continue
-            limits[k_clean] = [x.strip() for x in v.split(',') if x.strip()]
-
-    try:
-        res = generate_groups(n, names, genders, newbies, experts, limits=limits, 
-                              seed=int(seed) if seed else None, strict_r=strict_r, strict_g=strict_g)
-        st.success(f"✅ Seed: {res.used_seed} | Попыток: {res.attempts}")
-        if res.warnings: st.warning("⚠️ " + "; ".join(res.warnings))
+    # Auto-detect gender button
+    if st.button("🔍 Авто-определить пол у всех", type="secondary", width="stretch"):
+        auto_detect_genders()
+        st.rerun()
+    
+    # Warning for unrecognized names
+    current_df = st.session_state[DATA_KEY]
+    if "🚦 Статус" in current_df.columns:
+        undetected = current_df[current_df["🚦 Статус"].str.contains("🔴", na=False)]
+        if not undetected.empty:
+            st.warning(f"🔴 Проверьте вручную: {', '.join(undetected['Имя'])}")
+    
+    # Resident table
+    editor_df = render_resident_table()
+    
+    # Limits section
+    st.subheader("🌍 Границы")
+    limits_text = st.text_area(
+        "Укажите, кто не должен быть в одной группе (Имя: Через запятую)",
+        placeholder="Олег С: Леша Ч, Иван П\nАня К: Петя О, Маша И",
+        height=240
+    )
+    
+    # Settings
+    settings = render_generation_settings()
+    
+    # Generate button
+    st.markdown("---")
+    run_button = st.button("🚀 РАСПРЕДЕЛИТЬ!", type="primary", width="stretch")
+    
+    if run_button:
+        # Validate data
+        df = editor_df
+        if "Имя" not in df.columns or df.empty:
+            st.error("Таблица пуста. Добавьте резидентов.")
+            st.stop()
         
-        for i, g in enumerate(res.groups, 1):
-            st.subheader(f"Группа {i} ({len(g)} чел.)")
-            st.write(", ".join(g))
+        valid_df = df.dropna(subset=["Имя"])
+        names = valid_df["Имя"].str.strip().tolist()
+        
+        if len(set(names)) != len(names):
+            st.error("В таблице есть дубликаты имён.")
+            st.stop()
+        
+        # Extract data
+        genders = dict(zip(valid_df["Имя"].str.strip(), valid_df["Пол"]))
+        newbies = valid_df[valid_df["Роль"] == "Новичок"]["Имя"].str.strip().tolist()
+        experts = valid_df[valid_df["Роль"] == "ВПИ"]["Имя"].str.strip().tolist()
+        limits = parse_limits(limits_text)
+        
+        try:
+            # Generate groups
+            result = generate_groups(
+                n=settings["num_groups"],
+                names=names,
+                genders=genders,
+                newbies=newbies,
+                experts=experts,
+                limits=limits,
+                seed=int(settings["seed"]) if settings["seed"] else None,
+                strict_r=settings["strict_roles"],
+                strict_g=settings["strict_genders"],
+            )
             
-        if res.groups:
-            max_len = max(len(g) for g in res.groups)
-            export_data = {}
-            for i, g in enumerate(res.groups, 1):
-                col_name = f"Группа {i} ({len(g)} чел.)"
-                export_data[col_name] = g + [""] * (max_len - len(g))
-            df_export = pd.DataFrame(export_data)
+            # Display results
+            st.success(f"✅ Seed: {result.used_seed} | Попыток: {result.attempts}")
+            if result.warnings:
+                st.warning("⚠️ " + "; ".join(result.warnings))
             
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_export.to_excel(writer, index=False, sheet_name="Группы")
-            output.seek(0)
-            st.download_button("📥 Скачать результат в Excel", data=output, file_name="groups_result.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            for i, group in enumerate(result.groups, 1):
+                st.subheader(f"Группа {i} ({len(group)} чел.)")
+                st.write(", ".join(group))
             
-    except Exception as e:
-        st.error(f"❌ {e}")
-    st.stop() # ✅ Предотвращает лишний ререндер, который мог сбрасывать таблицу
+            # Export to Excel
+            if result.groups:
+                df_export = create_export_dataframe(result.groups)
+                
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df_export.to_excel(writer, index=False, sheet_name="Группы")
+                output.seek(0)
+                
+                st.download_button(
+                    "📥 Скачать результат в Excel",
+                    data=output,
+                    file_name="groups_result.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        
+        except Exception as e:
+            st.error(f"❌ {e}")
+        
+        st.stop()
+
+
+if __name__ == "__main__":
+    main()
