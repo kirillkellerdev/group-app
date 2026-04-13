@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
 import pandas as pd
-from names_db import detect_gender, RU_NAMES, is_name_recognized
+from gender_ai import detect_gender, is_name_recognized
 from generator import generate_groups
 
 # Page configuration
