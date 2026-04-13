@@ -262,6 +262,7 @@ def main():
                 details_parts.append(f"<b>Request:</b><br>")
                 details_parts.append(f"URL: {request_info.get('url', 'N/A')}<br>")
                 details_parts.append(f"Method: {request_info.get('method', 'N/A')}<br>")
+                details_parts.append(f"Headers: {request_info.get('headers', {})}<br>")
                 details_parts.append(f"Payload: {request_info.get('payload', {})}<br>")
             
             if response_info:
@@ -269,7 +270,7 @@ def main():
                 if "error" in response_info:
                     details_parts.append(f"Error: {response_info['error']}<br>")
                 else:
-                    details_parts.append(f"Status: {response_info.get('status_code', 'N/A')}<br>")
+                    details_parts.append(f"Status Code: {response_info.get('status_code', 'N/A')}<br>")
                     details_parts.append(f"Body: {response_info.get('body', {})}<br>")
             
             details_html = "".join(details_parts) if details_parts else entry["message"]

@@ -49,7 +49,7 @@ def detect_gender_by_namsor(name: str) -> Tuple[Optional[Gender], Optional[str],
         "request": {
             "url": NAMSOR_API_URL,
             "method": "POST",
-            "headers": {"X-API-Key": "***", "Content-Type": "application/json"},
+            "headers": {"X-API-Key": api_key if api_key else "(empty)", "Content-Type": "application/json"},
             "payload": {"name": name}
         },
         "response": {}
@@ -129,7 +129,7 @@ def detect_gender(name: str) -> Tuple[Gender, bool, str, dict]:
         "request": {
             "url": NAMSOR_API_URL,
             "method": "POST",
-            "headers": {"X-API-Key": "***", "Content-Type": "application/json"},
+            "headers": {"X-API-Key": api_key if api_key else "(empty)", "Content-Type": "application/json"},
             "payload": {"name": extract_first_name(name)}
         },
         "response": {"error": "API ключ не настроен"}
