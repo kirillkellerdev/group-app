@@ -78,10 +78,15 @@ def add_bulk_names(names_text: str) -> tuple[bool, str]:
     # Detect genders and statuses
     genders = []
     statuses = []
+    debug_messages = []
     for name in to_add:
-        genders.append(detect_gender(name))
-        first_word = name.strip().split()[0].lower().rstrip('.,!?:;')
-        statuses.append("✅" if is_name_recognized(first_word) else "🔴 Не определён")
+        gender_result, success, debug_msg = detect_gender(name)
+        genders.append(gender_result)
+        if success:
+            statuses.append("Пол определён через ИИ")
+        else:
+            statuses.append("🔴 Не удалось определить пол")
+        debug_messages.append(debug_msg)
     
     new_rows = pd.DataFrame({
         "Имя": to_add,
@@ -94,6 +99,12 @@ def add_bulk_names(names_text: str) -> tuple[bool, str]:
     if WIDGET_KEY in st.session_state:
         del st.session_state[WIDGET_KEY]
     
+    # Show debug messages for bulk import
+    if debug_messages:
+        with st.expander("🔍 Детали определения пола (AI)", expanded=False):
+            for name, msg in zip(to_add, debug_messages):
+                st.text(f"{name}: {msg}")
+    
     return True, f"✅ Добавлено: {len(to_add)}"
 
 
@@ -103,14 +114,34 @@ def auto_detect_genders() -> None:
     if df.empty:
         return
     
-    df["Пол"] = df["Имя"].astype(str).apply(detect_gender)
-    df["🚦 Статус"] = df["Имя"].apply(
-        lambda n: "✅" if is_name_recognized(n.strip().split()[0].lower().rstrip('.,!?:;')) else "🔴 Не определён"
-    )
+    # Process each row to get gender, success status, and debug message
+    results = df["Имя"].astype(str).apply(detect_gender)
+    df["Пол"] = results.apply(lambda x: x[0])
+    
+    # Collect debug messages
+    debug_messages = []
+    
+    # Set status based on whether Namsor successfully detected the gender
+    def get_status_and_debug(name):
+        _, success, debug_msg = detect_gender(name)
+        if success:
+            return ("Пол определён через ИИ", debug_msg)
+        else:
+            return ("🔴 Не удалось определить пол", debug_msg)
+    
+    status_results = df["Имя"].apply(get_status_and_debug)
+    df["🚦 Статус"] = status_results.apply(lambda x: x[0])
+    debug_messages = status_results.apply(lambda x: x[1]).tolist()
     
     st.session_state[DATA_KEY] = df
     if WIDGET_KEY in st.session_state:
         del st.session_state[WIDGET_KEY]
+    
+    # Show debug messages for auto-detection
+    if debug_messages:
+        with st.expander("🔍 Детали определения пола (AI)", expanded=False):
+            for name, msg in zip(df["Имя"].tolist(), debug_messages):
+                st.text(f"{name}: {msg}")
 
 
 def parse_limits(limits_text: str) -> dict[str, list[str]]:
@@ -199,7 +230,7 @@ def main():
     # Warning for unrecognized names
     current_df = st.session_state[DATA_KEY]
     if "🚦 Статус" in current_df.columns:
-        undetected = current_df[current_df["🚦 Статус"].str.contains("🔴", na=False)]
+        undetected = current_df[current_df["🚦 Статус"].str.contains("Не удалось определить пол", na=False)]
         if not undetected.empty:
             st.warning(f"🔴 Проверьте вручную: {', '.join(undetected['Имя'])}")
     
@@ -295,11 +326,26 @@ def main():
             if result.groups:
                 # Create styled Excel using openpyxl
                 from openpyxl import Workbook
-                from openpyxl.styles import Font
+                from openpyxl.styles import Font, PatternFill
                 
                 wb = Workbook()
                 ws = wb.active
                 ws.title = "Группы"
+                
+                # Create a second sheet for detailed info with status
+                ws_details = wb.create_sheet(title="Детали")
+                ws_details.append(["Имя", "Пол", "Роль", "Статус", "Группа"])
+                
+                # Build a lookup for status from the current dataframe
+                status_lookup = {}
+                role_lookup = {}
+                gender_lookup = {}
+                current_df = st.session_state[DATA_KEY]
+                for _, row in current_df.iterrows():
+                    name = row["Имя"].strip() if isinstance(row["Имя"], str) else str(row["Имя"]).strip()
+                    status_lookup[name] = row.get("🚦 Статус", "")
+                    role_lookup[name] = row.get("Роль", "Обычный")
+                    gender_lookup[name] = row.get("Пол", "M")
                 
                 # Write data and apply formatting
                 max_len = max(len(g) for g in result.groups) if result.groups else 0
@@ -320,10 +366,35 @@ def main():
                             font_style = Font(bold=True, italic=True)
                         
                         cell.font = font_style
+                        
+                        # Add to details sheet with status
+                        name_stripped = name.strip()
+                        status = status_lookup.get(name_stripped, "")
+                        role = role_lookup.get(name_stripped, "Обычный")
+                        gender = gender_lookup.get(name_stripped, "M")
+                        
+                        # Determine if status indicates failure (red fill)
+                        is_failure = "Не удалось определить пол" in status
+                        detail_font = Font(color="FF0000" if is_failure else None)
+                        detail_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid") if is_failure else None
+                        
+                        ws_details.append([name_stripped, gender, role, status, col_idx])
+                        # Apply red font and yellow background for failed status
+                        status_cell = ws_details.cell(row=ws_details.max_row, column=4)
+                        if is_failure:
+                            status_cell.font = Font(color="FF0000")
+                            status_cell.fill = detail_fill
                     
                     # Add header with count
                     header_cell = ws.cell(row=len(group) + 1, column=col_idx, value=f"({len(group)} чел.)")
                     header_cell.font = Font(italic=True)
+                
+                # Format details sheet columns
+                ws_details.column_dimensions["A"].width = 25
+                ws_details.column_dimensions["B"].width = 10
+                ws_details.column_dimensions["C"].width = 15
+                ws_details.column_dimensions["D"].width = 35
+                ws_details.column_dimensions["E"].width = 10
                 
                 output = io.BytesIO()
                 wb.save(output)

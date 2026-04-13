@@ -3,7 +3,7 @@
 
 import os
 import re
-from typing import Literal, Optional
+from typing import Literal, Optional, Tuple
 import requests
 
 Gender = Literal["M", "F"]
@@ -30,18 +30,20 @@ def extract_first_name(name: str) -> str:
     return name.strip().split()[0].lower().rstrip(".,!?:;")
 
 
-def detect_gender_by_namsor(name: str) -> Optional[Gender]:
+def detect_gender_by_namsor(name: str) -> Tuple[Optional[Gender], Optional[str]]:
     """Detect gender using the Namsor API.
     
     Args:
         name: First name or full name
         
     Returns:
-        'M' for male, 'F' for female, or None if API call fails
+        Tuple of (gender, debug_message):
+        - gender: 'M' for male, 'F' for female, or None if API call fails
+        - debug_message: Information about the API call result
     """
     api_key = get_namsor_api_key()
     if not api_key:
-        raise ValueError("NAMSOR_API_KEY environment variable is not set")
+        return (None, "❌ API ключ не настроен")
     
     headers = {
         "X-API-Key": api_key,
@@ -61,24 +63,35 @@ def detect_gender_by_namsor(name: str) -> Optional[Gender]:
         gender_result = data.get("gender", "").lower()
         
         if gender_result == "male":
-            return "M"
+            return ("M", f"✅ Namsor: male")
         elif gender_result == "female":
-            return "F"
+            return ("F", f"✅ Namsor: female")
         else:
-            return None
+            return (None, f"⚠️ Namsor: неизвестный пол ({data.get('gender', 'N/A')})")
             
-    except requests.exceptions.RequestException:
-        return None
+    except requests.exceptions.Timeout:
+        return (None, "❌ Namsor: таймаут запроса")
+    except requests.exceptions.ConnectionError:
+        return (None, "❌ Namsor: ошибка подключения")
+    except requests.exceptions.HTTPError as e:
+        return (None, f"❌ Namsor: HTTP ошибка {e.response.status_code}")
+    except requests.exceptions.RequestException as e:
+        return (None, f"❌ Namsor: ошибка запроса ({str(e)})")
+    except Exception as e:
+        return (None, f"❌ Namsor: непредвиденная ошибка ({str(e)})")
 
 
-def detect_gender(name: str) -> Gender:
+def detect_gender(name: str) -> Tuple[Gender, bool, str]:
     """Detect gender by the first name using Namsor AI API.
     
     Args:
         name: Full name or first name
         
     Returns:
-        'M' for male, 'F' for female, or 'M' as default if detection fails
+        Tuple of (gender, success, debug_message):
+        - gender: 'M' for male, 'F' for female, or 'M' as default if detection fails
+        - success: True if Namsor successfully detected the gender, False otherwise
+        - debug_message: Information about the API call result for display in UI
         
     Raises:
         ValueError: If NAMSOR_API_KEY is not configured
@@ -90,13 +103,13 @@ def detect_gender(name: str) -> Gender:
     
     first_name = extract_first_name(name)
     
-    gender = detect_gender_by_namsor(first_name)
+    gender, debug_msg = detect_gender_by_namsor(first_name)
     
     if gender is None:
         # Default to 'M' if API fails or returns unknown gender
-        return "M"
+        return ("M", False, debug_msg or "❌ Не удалось определить пол")
     
-    return gender
+    return (gender, True, debug_msg or "✅ Пол определён через ИИ")
 
 
 def is_name_recognized(name: str) -> bool:

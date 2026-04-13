@@ -1,1 +1,4 @@
-Nothing should be ignored based on the provided file changes. The modified files (`app.py` and `gender_ai.py`) are source code files that should be tracked in version control.
+```
+__pycache__/
+*.pyc
+```
