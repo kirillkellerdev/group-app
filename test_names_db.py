@@ -1,7 +1,7 @@
-"""Unit tests for names_db.py module."""
+"""Unit tests for gender_ai.py module."""
 
 import pytest
-from names_db import extract_first_name, detect_gender, is_name_recognized, RU_NAMES
+from gender_ai import extract_first_name, detect_gender, is_name_recognized
 
 
 class TestExtractFirstName:
@@ -45,7 +45,7 @@ class TestExtractFirstName:
 
 
 class TestDetectGender:
-    """Tests for detect_gender function."""
+    """Tests for detect_gender function using AI-based detection."""
 
     def test_male_names(self):
         """Test detection of male names."""
@@ -86,9 +86,11 @@ class TestDetectGender:
         assert detect_gender("Екатерина Сергеевна Смирнова") == "F"
 
     def test_unknown_name_defaults_to_male(self):
-        """Test that unknown names default to 'M'."""
-        assert detect_gender("НеизвестноеИмя") == "M"
+        """Test that unknown names default to 'M' based on ending patterns."""
+        # Names ending in consonants default to M
         assert detect_gender("XYZ") == "M"
+        # Names ending in -а/-я default to F
+        assert detect_gender("НеизвестноеИмя") == "F"  # ends in 'я'
 
     def test_case_insensitive(self):
         """Test that detection is case insensitive."""
@@ -102,27 +104,41 @@ class TestDetectGender:
         assert detect_gender("Иван,") == "M"
         assert detect_gender("Мария.") == "F"
 
+    def test_names_ending_in_soft_sign(self):
+        """Test names ending in soft sign (ь) are detected as female."""
+        assert detect_gender("Любовь") == "F"
+        assert detect_gender("Ночь") == "F"
+
+    def test_male_exceptions(self):
+        """Test male names that are exceptions to typical patterns."""
+        assert detect_gender("Никита") == "M"  # ends in -а but male
+        assert detect_gender("Юрий") == "M"  # ends in -й but male
+        assert detect_gender("Андрей") == "M"
+
 
 class TestIsNameRecognized:
     """Tests for is_name_recognized function."""
 
-    def test_recognized_male_names(self):
-        """Test recognition of male names."""
+    def test_recognized_cyrillic_names(self):
+        """Test recognition of Cyrillic names."""
         assert is_name_recognized("Александр") is True
         assert is_name_recognized("Иван") is True
-        # Note: Дмитрий is not in the database, use "дима" instead
-        assert is_name_recognized("Дима") is True
-
-    def test_recognized_female_names(self):
-        """Test recognition of female names."""
         assert is_name_recognized("Мария") is True
-        assert is_name_recognized("Анна") is True
-        assert is_name_recognized("Екатерина") is True
 
-    def test_unrecognized_names(self):
-        """Test unrecognized names."""
-        assert is_name_recognized("НеизвестноеИмя") is False
-        assert is_name_recognized("XYZ123") is False
+    def test_recognized_latin_names(self):
+        """Test recognition of Latin alphabet names."""
+        assert is_name_recognized("John") is True
+        assert is_name_recognized("Mary") is True
+
+    def test_unrecognized_short_names(self):
+        """Test unrecognized very short names."""
+        assert is_name_recognized("А") is False  # Too short
+        assert is_name_recognized("X") is False
+
+    def test_unrecognized_non_alphabetic(self):
+        """Test unrecognized non-alphabetic names."""
+        assert is_name_recognized("123") is False
+        assert is_name_recognized("Name123") is False
 
     def test_case_insensitive_recognition(self):
         """Test that recognition is case insensitive."""
@@ -140,41 +156,3 @@ class TestIsNameRecognized:
         """Test handling punctuation in names."""
         assert is_name_recognized("Иван,") is True
         assert is_name_recognized("Мария.") is True
-
-
-class TestRuNamesDatabase:
-    """Tests for RU_NAMES database."""
-
-    def test_database_not_empty(self):
-        """Test that the database contains entries."""
-        assert len(RU_NAMES) > 0
-
-    def test_all_values_are_m_or_f(self):
-        """Test that all gender values are either 'M' or 'F'."""
-        for name, gender in RU_NAMES.items():
-            assert gender in ["M", "F"], f"Invalid gender '{gender}' for name '{name}'"
-
-    def test_all_keys_are_lowercase(self):
-        """Test that all name keys are lowercase."""
-        for name in RU_NAMES.keys():
-            assert name == name.lower(), f"Name '{name}' is not lowercase"
-
-    def test_no_duplicate_names(self):
-        """Test that there are no duplicate names."""
-        names_list = list(RU_NAMES.keys())
-        assert len(names_list) == len(set(names_list))
-
-    def test_common_male_names_present(self):
-        """Test that common male names are in database."""
-        # Note: Database contains diminutive forms like "дима" not "дмитрий"
-        common_male = ["александр", "иван", "сергей", "дима", "андрей"]
-        for name in common_male:
-            assert name in RU_NAMES
-            assert RU_NAMES[name] == "M"
-
-    def test_common_female_names_present(self):
-        """Test that common female names are in database."""
-        common_female = ["мария", "анна", "елена", "наталья", "екатерина"]
-        for name in common_female:
-            assert name in RU_NAMES
-            assert RU_NAMES[name] == "F"
