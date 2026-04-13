@@ -1,10 +1,16 @@
 # gender_ai.py
-"""AI-based gender detection using name analysis."""
+"""AI-based gender detection using Namsor API."""
 
+import os
 import re
-from typing import Literal
+from typing import Literal, Optional
+import requests
 
 Gender = Literal["M", "F"]
+
+# Namsor API configuration
+NAMSOR_API_KEY = os.getenv("NAMSOR_API_KEY", "")
+NAMSOR_API_URL = "https://api.namsor.com/api/gender/full"
 
 
 def extract_first_name(name: str) -> str:
@@ -19,110 +25,89 @@ def extract_first_name(name: str) -> str:
     return name.strip().split()[0].lower().rstrip(".,!?:;")
 
 
-def detect_gender_by_ending(name: str) -> Gender:
-    """Detect gender based on Russian name ending patterns.
-    
-    This uses common linguistic patterns in Russian names:
-    - Names ending in -а/-я are typically female
-    - Names ending in consonants are typically male
-    - Some exceptions are handled explicitly
+def detect_gender_by_namsor(name: str) -> Optional[Gender]:
+    """Detect gender using the Namsor API.
     
     Args:
-        name: First name in lowercase
+        name: First name or full name
         
     Returns:
-        'M' for male, 'F' for female
+        'M' for male, 'F' for female, or None if API call fails
     """
-    # Explicit male exceptions that end in -а/-я
-    male_exceptions_ending_in_vowel = [
-        'никита', 'кузьма', 'фома', 'лука', 
-        'юрий', 'андрей', 'сергей', 'алексей', 'валерий',
-        'геннадий', 'аркадий', 'игорий', 'рома', 'леонид',
-        'илья', 'егор', 'михаил', 'василий', 'григорий',
-        'константин', 'виктор', 'павел', 'петр', 'николай',
-        'анатолий', 'дмитрий', 'владимир', 'александр',
-    ]
+    if not NAMSOR_API_KEY:
+        raise ValueError("NAMSOR_API_KEY environment variable is not set")
     
-    # Explicit female exceptions that end in consonant
-    female_exceptions_ending_in_consonant = [
-        'любовь', 'мать', 'дочь', 'ночь',  # -ь endings
-        'юдит', 'милдред',  # rare foreign names
-    ]
+    headers = {
+        "X-API-Key": NAMSOR_API_KEY,
+        "Content-Type": "application/json"
+    }
     
-    # Common diminutive male names ending in -а/-я
-    male_diminutives = [
-        'саша', 'дима', 'ваня', 'сеня', 'петя', 'коля', 'боря', 
-        'юра', 'толя', 'лёша', 'леша', 'витя', 'паша', 'гриша',
-        'георгий', 'жора', 'аркаша', 'веня', 'костя', 'лёня',
-        'стёпа', 'федя', 'матвей', 'митя', 'даня', 'ярик',
-        'филя', 'рудик', 'семён', 'стас', 'яша', 'вадим',
-        'миша', 'рома', 'игорь', 'макс', 'максим', 'тимур',
-        'марк', 'лев', 'лёва', 'арсений', 'кирилл',
-        'роман', 'олег', 'денис', 'антон',
-    ]
+    payload = {
+        "name": name
+    }
     
-    # Common diminutive female names (these naturally end in -а/-я so will be detected correctly)
-    female_diminutives = [
-        'настя', 'катя', 'маша', 'оля', 'таня', 'лена', 'ира',
-        'вика', 'света', 'галя', 'даша', 'женя', 'лида', 'люда',
-        'люся', 'надя', 'наташа', 'соня', 'поля', 'уля', 'юля',
-        'яна', 'тая', 'варя', 'ася', 'элли', 'нина', 'зоя',
-    ]
-    
-    name_lower = name.lower()
-    
-    # Check explicit exceptions first - male diminutives and exceptions
-    if name_lower in male_exceptions_ending_in_vowel or name_lower in male_diminutives:
-        return "M"
-    
-    # Check female exceptions
-    if name_lower in female_exceptions_ending_in_consonant or name_lower in female_diminutives:
-        return "F"
-    
-    # Check for soft sign ending (ь) - typically female in Russian names
-    if name_lower.endswith('ь'):
-        return "F"
-    
-    # Check for typical female endings (-а, -я)
-    if name_lower.endswith(('а', 'я')):
-        return "F"
-    
-    # Default to male for consonant endings
-    return "M"
+    try:
+        response = requests.post(NAMSOR_API_URL, json=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Namsor returns gender as "male" or "female"
+        gender_result = data.get("gender", "").lower()
+        
+        if gender_result == "male":
+            return "M"
+        elif gender_result == "female":
+            return "F"
+        else:
+            return None
+            
+    except requests.exceptions.RequestException:
+        return None
 
 
 def detect_gender(name: str) -> Gender:
-    """Detect gender by the first name using AI-based analysis.
-    
-    Uses a combination of:
-    1. Pattern matching on name endings
-    2. Linguistic rules for Russian names
-    3. Statistical analysis of common name patterns
+    """Detect gender by the first name using Namsor AI API.
     
     Args:
         name: Full name or first name
         
     Returns:
         'M' for male, 'F' for female
+        
+    Raises:
+        ValueError: If NAMSOR_API_KEY is not configured
+        RuntimeError: If API call fails
     """
+    if not NAMSOR_API_KEY:
+        raise ValueError("NAMSOR_API_KEY environment variable is not set. "
+                        "Please set it before using gender detection.")
+    
     first_name = extract_first_name(name)
-    return detect_gender_by_ending(first_name)
+    
+    gender = detect_gender_by_namsor(first_name)
+    
+    if gender is None:
+        raise RuntimeError(f"Failed to detect gender for name: {name}. "
+                          "API request failed or returned unknown gender.")
+    
+    return gender
 
 
 def is_name_recognized(name: str) -> bool:
-    """Check if a name can be analyzed by the AI system.
+    """Check if a name can be analyzed by the Namsor API.
     
-    Since we're using pattern-based detection, virtually any name
-    can be analyzed. This function returns True for any non-empty name.
+    This function validates that the name has valid format before
+    sending it to the API.
     
     Args:
         name: Full name or first name
         
     Returns:
-        True if name can be analyzed (always True for valid input)
+        True if name has valid format, False otherwise
     """
     first_name = extract_first_name(name)
-    # Consider a name "recognized" if it has at least 2 characters
+    
+    # Consider a name valid if it has at least 2 characters
     # and contains only alphabetic characters (including Cyrillic)
     if len(first_name) < 2:
         return False
