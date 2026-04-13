@@ -30,6 +30,8 @@ def initialize_session_state() -> None:
         st.session_state.get(DATA_KEY), pd.DataFrame
     ):
         st.session_state[DATA_KEY] = pd.DataFrame(columns=DEFAULT_COLUMNS)
+    if "namsor_debug_log" not in st.session_state:
+        st.session_state["namsor_debug_log"] = []
 
 
 def migrate_roles() -> bool:
@@ -86,7 +88,9 @@ def add_bulk_names(names_text: str) -> tuple[bool, str]:
             statuses.append("Пол определён через ИИ")
         else:
             statuses.append("🔴 Не удалось определить пол")
-        debug_messages.append(debug_msg)
+        debug_messages.append((name, debug_msg))
+        # Add to global debug log
+        st.session_state["namsor_debug_log"].append({"name": name, "message": debug_msg, "success": success})
     
     new_rows = pd.DataFrame({
         "Имя": to_add,
@@ -98,12 +102,6 @@ def add_bulk_names(names_text: str) -> tuple[bool, str]:
     st.session_state[DATA_KEY] = pd.concat([df, new_rows], ignore_index=True)
     if WIDGET_KEY in st.session_state:
         del st.session_state[WIDGET_KEY]
-    
-    # Show debug messages for bulk import
-    if debug_messages:
-        with st.expander("🔍 Детали определения пола (AI)", expanded=False):
-            for name, msg in zip(to_add, debug_messages):
-                st.text(f"{name}: {msg}")
     
     return True, f"✅ Добавлено: {len(to_add)}"
 
@@ -124,6 +122,8 @@ def auto_detect_genders() -> None:
     # Set status based on whether Namsor successfully detected the gender
     def get_status_and_debug(name):
         _, success, debug_msg = detect_gender(name)
+        # Add to global debug log
+        st.session_state["namsor_debug_log"].append({"name": name, "message": debug_msg, "success": success})
         if success:
             return ("Пол определён через ИИ", debug_msg)
         else:
@@ -136,12 +136,6 @@ def auto_detect_genders() -> None:
     st.session_state[DATA_KEY] = df
     if WIDGET_KEY in st.session_state:
         del st.session_state[WIDGET_KEY]
-    
-    # Show debug messages for auto-detection
-    if debug_messages:
-        with st.expander("🔍 Детали определения пола (AI)", expanded=False):
-            for name, msg in zip(df["Имя"].tolist(), debug_messages):
-                st.text(f"{name}: {msg}")
 
 
 def parse_limits(limits_text: str) -> dict[str, list[str]]:
@@ -233,6 +227,35 @@ def main():
         undetected = current_df[current_df["🚦 Статус"].str.contains("Не удалось определить пол", na=False)]
         if not undetected.empty:
             st.warning(f"🔴 Проверьте вручную: {', '.join(undetected['Имя'])}")
+    
+    # Always visible Namsor API details section
+    st.subheader("📡 Детали коммуникации с Namsor API")
+    if st.session_state["namsor_debug_log"]:
+        # Display as a table with all entries
+        log_data = []
+        for entry in st.session_state["namsor_debug_log"]:
+            if entry["success"]:
+                status_text = "Пол определен ИИ"
+                status_color = "green"
+            else:
+                status_text = "Пол не мог быть определён ИИ"
+                status_color = "red"
+            log_data.append({
+                "Имя": entry["name"],
+                "Статус": f"<span style='color: {status_color}; font-weight: bold;'>{status_text}</span>",
+                "Детали": entry["message"]
+            })
+        log_df = pd.DataFrame(log_data)
+        st.dataframe(
+            log_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Статус": st.column_config.TextColumn("Статус"),
+            }
+        )
+    else:
+        st.info("Пока нет записей о коммуникации с Namsor API. Добавьте имена или используйте авто-определение пола.")
     
     # Resident table
     editor_df = render_resident_table()
