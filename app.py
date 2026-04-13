@@ -82,15 +82,20 @@ def add_bulk_names(names_text: str) -> tuple[bool, str]:
     statuses = []
     debug_messages = []
     for name in to_add:
-        gender_result, success, debug_msg = detect_gender(name)
+        gender_result, success, debug_msg, request_details = detect_gender(name)
         genders.append(gender_result)
         if success:
             statuses.append("Пол определён через ИИ")
         else:
             statuses.append("🔴 Не удалось определить пол")
-        debug_messages.append((name, debug_msg))
-        # Add to global debug log
-        st.session_state["namsor_debug_log"].append({"name": name, "message": debug_msg, "success": success})
+        debug_messages.append((name, debug_msg, request_details))
+        # Add to global debug log with full request/response details
+        st.session_state["namsor_debug_log"].append({
+            "name": name, 
+            "message": debug_msg, 
+            "success": success,
+            "request_details": request_details
+        })
     
     new_rows = pd.DataFrame({
         "Имя": to_add,
@@ -121,9 +126,14 @@ def auto_detect_genders() -> None:
     
     # Set status based on whether Namsor successfully detected the gender
     def get_status_and_debug(name):
-        _, success, debug_msg = detect_gender(name)
-        # Add to global debug log
-        st.session_state["namsor_debug_log"].append({"name": name, "message": debug_msg, "success": success})
+        _, success, debug_msg, request_details = detect_gender(name)
+        # Add to global debug log with full request/response details
+        st.session_state["namsor_debug_log"].append({
+            "name": name, 
+            "message": debug_msg, 
+            "success": success,
+            "request_details": request_details
+        })
         if success:
             return ("Пол определён через ИИ", debug_msg)
         else:
@@ -231,7 +241,7 @@ def main():
     # Always visible Namsor API details section
     st.subheader("📡 Детали коммуникации с Namsor API")
     if st.session_state["namsor_debug_log"]:
-        # Display as a table with all entries
+        # Display as a table with all entries showing full HTTP request/response details
         log_data = []
         for entry in st.session_state["namsor_debug_log"]:
             if entry["success"]:
@@ -240,10 +250,34 @@ def main():
             else:
                 status_text = "Пол не мог быть определён ИИ"
                 status_color = "red"
+            
+            # Format request and response details as JSON-like text
+            request_details = entry.get("request_details", {})
+            request_info = request_details.get("request", {})
+            response_info = request_details.get("response", {})
+            
+            # Build detailed info string
+            details_parts = []
+            if request_info:
+                details_parts.append(f"<b>Request:</b><br>")
+                details_parts.append(f"URL: {request_info.get('url', 'N/A')}<br>")
+                details_parts.append(f"Method: {request_info.get('method', 'N/A')}<br>")
+                details_parts.append(f"Payload: {request_info.get('payload', {})}<br>")
+            
+            if response_info:
+                details_parts.append(f"<br><b>Response:</b><br>")
+                if "error" in response_info:
+                    details_parts.append(f"Error: {response_info['error']}<br>")
+                else:
+                    details_parts.append(f"Status: {response_info.get('status_code', 'N/A')}<br>")
+                    details_parts.append(f"Body: {response_info.get('body', {})}<br>")
+            
+            details_html = "".join(details_parts) if details_parts else entry["message"]
+            
             log_data.append({
                 "Имя": entry["name"],
                 "Статус": f"<span style='color: {status_color}; font-weight: bold;'>{status_text}</span>",
-                "Детали": entry["message"]
+                "Детали": details_html
             })
         log_df = pd.DataFrame(log_data)
         st.dataframe(
@@ -252,6 +286,7 @@ def main():
             hide_index=True,
             column_config={
                 "Статус": st.column_config.TextColumn("Статус"),
+                "Детали": st.column_config.TextColumn("Детали", width="large"),
             }
         )
     else:
