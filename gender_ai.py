@@ -8,8 +8,13 @@ import requests
 
 Gender = Literal["M", "F"]
 
+
+def get_namsor_api_key() -> str:
+    """Get the Namsor API key from environment variable."""
+    return os.getenv("NAMSOR_API_KEY", "")
+
+
 # Namsor API configuration
-NAMSOR_API_KEY = os.getenv("NAMSOR_API_KEY", "")
 NAMSOR_API_URL = "https://api.namsor.com/api/gender/full"
 
 
@@ -34,11 +39,12 @@ def detect_gender_by_namsor(name: str) -> Optional[Gender]:
     Returns:
         'M' for male, 'F' for female, or None if API call fails
     """
-    if not NAMSOR_API_KEY:
+    api_key = get_namsor_api_key()
+    if not api_key:
         raise ValueError("NAMSOR_API_KEY environment variable is not set")
     
     headers = {
-        "X-API-Key": NAMSOR_API_KEY,
+        "X-API-Key": api_key,
         "Content-Type": "application/json"
     }
     
@@ -77,7 +83,8 @@ def detect_gender(name: str) -> Gender:
     Raises:
         ValueError: If NAMSOR_API_KEY is not configured
     """
-    if not NAMSOR_API_KEY:
+    api_key = get_namsor_api_key()
+    if not api_key:
         raise ValueError("NAMSOR_API_KEY environment variable is not set. "
                         "Please set it before using gender detection.")
     

@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
 import pandas as pd
-from gender_ai import detect_gender, is_name_recognized, NAMSOR_API_KEY
+from gender_ai import detect_gender, is_name_recognized, get_namsor_api_key
 from generator import generate_groups
 
 # Page configuration
@@ -170,7 +170,7 @@ def main():
     initialize_session_state()
     
     # Check for missing API key and show warning
-    if not NAMSOR_API_KEY:
+    if not get_namsor_api_key():
         st.warning("⚠️ **AI-определение пола не работает**: отсутствует переменная окружения `NAMSOR_API_KEY`. "
                   "Пожалуйста, установите её для автоматического определения пола.")
     
@@ -273,15 +273,16 @@ def main():
                     gender = genders.get(name_stripped, "M")
                     
                     # Build HTML with bold for VPI, italic for Newbies, and color for gender
+                    # Female = red, Male = blue (UI only)
                     style_parts = []
                     if is_vpi:
                         style_parts.append("font-weight: bold;")
                     if is_newbie:
                         style_parts.append("font-style: italic;")
                     if gender == "F":
-                        style_parts.append("color: darkblue;")
+                        style_parts.append("color: red;")
                     elif gender == "M":
-                        style_parts.append("color: darkred;")
+                        style_parts.append("color: blue;")
                     
                     if style_parts:
                         formatted_names.append(f'<span style="{" ".join(style_parts)}">{name_stripped}</span>')
@@ -309,7 +310,7 @@ def main():
                     for row_idx, name in enumerate(group, 1):
                         cell = ws.cell(row=row_idx, column=col_idx, value=name)
                         
-                        # Apply font styling based on role
+                        # Apply font styling based on role (VPI=bold, Newbie=italic)
                         font_style = Font()
                         if name in experts:
                             font_style = Font(bold=True)
