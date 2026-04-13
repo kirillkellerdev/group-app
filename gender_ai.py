@@ -72,11 +72,10 @@ def detect_gender(name: str) -> Gender:
         name: Full name or first name
         
     Returns:
-        'M' for male, 'F' for female
+        'M' for male, 'F' for female, or 'M' as default if detection fails
         
     Raises:
         ValueError: If NAMSOR_API_KEY is not configured
-        RuntimeError: If API call fails
     """
     if not NAMSOR_API_KEY:
         raise ValueError("NAMSOR_API_KEY environment variable is not set. "
@@ -87,8 +86,8 @@ def detect_gender(name: str) -> Gender:
     gender = detect_gender_by_namsor(first_name)
     
     if gender is None:
-        raise RuntimeError(f"Failed to detect gender for name: {name}. "
-                          "API request failed or returned unknown gender.")
+        # Default to 'M' if API fails or returns unknown gender
+        return "M"
     
     return gender
 

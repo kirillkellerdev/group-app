@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
 import pandas as pd
-from gender_ai import detect_gender, is_name_recognized
+from gender_ai import detect_gender, is_name_recognized, NAMSOR_API_KEY
 from generator import generate_groups
 
 # Page configuration
@@ -130,18 +130,6 @@ def parse_limits(limits_text: str) -> dict[str, list[str]]:
     return limits
 
 
-def create_export_dataframe(groups: list[list[str]]) -> pd.DataFrame:
-    """Create DataFrame for Excel export with equal-length columns."""
-    max_len = max(len(g) for g in groups) if groups else 0
-    export_data = {}
-    
-    for i, group in enumerate(groups, 1):
-        col_name = f"Группа {i} ({len(group)} чел.)"
-        export_data[col_name] = group + [""] * (max_len - len(group))
-    
-    return pd.DataFrame(export_data)
-
-
 def render_resident_table() -> pd.DataFrame:
     """Render the resident data editor table."""
     st.subheader("📝 Резиденты")
@@ -180,6 +168,11 @@ def main():
     """Main application entry point."""
     # Initialize session state
     initialize_session_state()
+    
+    # Check for missing API key and show warning
+    if not NAMSOR_API_KEY:
+        st.warning("⚠️ **AI-определение пола не работает**: отсутствует переменная окружения `NAMSOR_API_KEY`. "
+                  "Пожалуйста, установите её для автоматического определения пола.")
     
     # Run role migration if needed
     if migrate_roles():
@@ -267,17 +260,72 @@ def main():
             if result.warnings:
                 st.warning("⚠️ " + "; ".join(result.warnings))
             
+            # Create formatted HTML for UI display and styled Excel export
             for i, group in enumerate(result.groups, 1):
                 st.subheader(f"Группа {i} ({len(group)} чел.)")
-                st.write(", ".join(group))
+                
+                # Format names with styling for UI
+                formatted_names = []
+                for name in group:
+                    name_stripped = name.strip()
+                    is_vpi = name_stripped in experts
+                    is_newbie = name_stripped in newbies
+                    gender = genders.get(name_stripped, "M")
+                    
+                    # Build HTML with bold for VPI, italic for Newbies, and color for gender
+                    style_parts = []
+                    if is_vpi:
+                        style_parts.append("font-weight: bold;")
+                    if is_newbie:
+                        style_parts.append("font-style: italic;")
+                    if gender == "F":
+                        style_parts.append("color: darkblue;")
+                    elif gender == "M":
+                        style_parts.append("color: darkred;")
+                    
+                    if style_parts:
+                        formatted_names.append(f'<span style="{" ".join(style_parts)}">{name_stripped}</span>')
+                    else:
+                        formatted_names.append(name_stripped)
+                
+                st.write(", ".join(formatted_names), unsafe_allow_html=True)
             
-            # Export to Excel
+            # Export to Excel with formatting (bold/italic only, no colors)
             if result.groups:
-                df_export = create_export_dataframe(result.groups)
+                # Create styled Excel using openpyxl
+                from openpyxl import Workbook
+                from openpyxl.styles import Font
+                
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "Группы"
+                
+                # Write data and apply formatting
+                max_len = max(len(g) for g in result.groups) if result.groups else 0
+                for col_idx, group in enumerate(result.groups, 1):
+                    col_letter = chr(64 + col_idx)  # A, B, C, ...
+                    ws.column_dimensions[col_letter].width = 25
+                    
+                    for row_idx, name in enumerate(group, 1):
+                        cell = ws.cell(row=row_idx, column=col_idx, value=name)
+                        
+                        # Apply font styling based on role
+                        font_style = Font()
+                        if name in experts:
+                            font_style = Font(bold=True)
+                        if name in newbies:
+                            font_style = Font(italic=True)
+                        if name in experts and name in newbies:
+                            font_style = Font(bold=True, italic=True)
+                        
+                        cell.font = font_style
+                    
+                    # Add header with count
+                    header_cell = ws.cell(row=len(group) + 1, column=col_idx, value=f"({len(group)} чел.)")
+                    header_cell.font = Font(italic=True)
                 
                 output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df_export.to_excel(writer, index=False, sheet_name="Группы")
+                wb.save(output)
                 output.seek(0)
                 
                 st.download_button(
