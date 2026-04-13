@@ -1,4 +1,1 @@
-```
-__pycache__/
-*.pyc
-```
+Nothing needs to be added to .gitignore since only Python test files (.py) were added, which are source code files that should be tracked in version control.
