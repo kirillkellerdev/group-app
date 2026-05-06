@@ -238,60 +238,52 @@ def main():
         if not undetected.empty:
             st.warning(f"🔴 Проверьте вручную: {', '.join(undetected['Имя'])}")
     
-    # Always visible Namsor API details section
-    st.subheader("📡 Детали коммуникации с Namsor API")
-    if st.session_state["namsor_debug_log"]:
-        # Display as a table with all entries showing full HTTP request/response details
-        log_data = []
-        for entry in st.session_state["namsor_debug_log"]:
-            if entry["success"]:
-                status_text = "Пол определен ИИ"
-                status_color = "green"
-            else:
-                status_text = "Пол не мог быть определён ИИ"
-                status_color = "red"
-            
-            # Format request and response details as JSON-like text
-            request_details = entry.get("request_details", {})
-            request_info = request_details.get("request", {})
-            response_info = request_details.get("response", {})
-            
-            # Build detailed info string
-            details_parts = []
-            if request_info:
-                details_parts.append(f"<b>Request:</b><br>")
-                details_parts.append(f"URL: {request_info.get('url', 'N/A')}<br>")
-                details_parts.append(f"Method: {request_info.get('method', 'N/A')}<br>")
-                details_parts.append(f"Headers: {request_info.get('headers', {})}<br>")
-                details_parts.append(f"Payload: {request_info.get('payload', {})}<br>")
-            
-            if response_info:
-                details_parts.append(f"<br><b>Response:</b><br>")
-                if "error" in response_info:
-                    details_parts.append(f"Error: {response_info['error']}<br>")
+    # Expandable Namsor API details section (closed by default)
+    with st.expander("📡 Детали коммуникации с Namsor API", expanded=False):
+        if st.session_state["namsor_debug_log"]:
+            # Display as plain text with all entries showing full HTTP request/response details
+            for entry in st.session_state["namsor_debug_log"]:
+                if entry["success"]:
+                    status_text = "Пол определен ИИ"
+                    status_color = "green"
                 else:
-                    details_parts.append(f"Status Code: {response_info.get('status_code', 'N/A')}<br>")
-                    details_parts.append(f"Body: {response_info.get('body', {})}<br>")
-            
-            details_html = "".join(details_parts) if details_parts else entry["message"]
-            
-            log_data.append({
-                "Имя": entry["name"],
-                "Статус": f"<span style='color: {status_color}; font-weight: bold;'>{status_text}</span>",
-                "Детали": details_html
-            })
-        log_df = pd.DataFrame(log_data)
-        st.dataframe(
-            log_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Статус": st.column_config.TextColumn("Статус"),
-                "Детали": st.column_config.TextColumn("Детали", width="large"),
-            }
-        )
-    else:
-        st.info("Пока нет записей о коммуникации с Namsor API. Добавьте имена или используйте авто-определение пола.")
+                    status_text = "Пол не мог быть определён ИИ"
+                    status_color = "red"
+                
+                # Format request and response details as plain text
+                request_details = entry.get("request_details", {})
+                request_info = request_details.get("request", {})
+                response_info = request_details.get("response", {})
+                
+                # Build detailed info string
+                details_lines = []
+                details_lines.append(f"Имя: {entry['name']}")
+                details_lines.append(f"Статус: {status_text}")
+                details_lines.append("")
+                
+                if request_info:
+                    details_lines.append("Request:")
+                    details_lines.append(f"  URL: {request_info.get('url', 'N/A')}")
+                    details_lines.append(f"  Method: {request_info.get('method', 'N/A')}")
+                    details_lines.append(f"  Headers: {request_info.get('headers', {})}")
+                    details_lines.append(f"  Payload: {request_info.get('payload', {})}")
+                
+                if response_info:
+                    details_lines.append("")
+                    details_lines.append("Response:")
+                    if "error" in response_info:
+                        details_lines.append(f"  Error: {response_info['error']}")
+                    else:
+                        details_lines.append(f"  Status Code: {response_info.get('status_code', 'N/A')}")
+                        details_lines.append(f"  Body: {response_info.get('body', {})}")
+                
+                details_lines.append("")
+                details_lines.append("-" * 50)
+                details_lines.append("")
+                
+                st.text("\n".join(details_lines))
+        else:
+            st.info("Пока нет записей о коммуникации с Namsor API. Добавьте имена или используйте авто-определение пола.")
     
     # Resident table
     editor_df = render_resident_table()
@@ -354,9 +346,12 @@ def main():
             for i, group in enumerate(result.groups, 1):
                 st.subheader(f"Группа {i} ({len(group)} чел.)")
                 
+                # Sort group members alphabetically
+                sorted_group = sorted(group, key=lambda x: x.strip().lower())
+                
                 # Format names with styling for UI
                 formatted_names = []
-                for name in group:
+                for name in sorted_group:
                     name_stripped = name.strip()
                     is_vpi = name_stripped in experts
                     is_newbie = name_stripped in newbies
@@ -409,10 +404,13 @@ def main():
                 # Write data and apply formatting
                 max_len = max(len(g) for g in result.groups) if result.groups else 0
                 for col_idx, group in enumerate(result.groups, 1):
+                    # Sort group members alphabetically for Excel export
+                    sorted_group = sorted(group, key=lambda x: x.strip().lower())
+                    
                     col_letter = chr(64 + col_idx)  # A, B, C, ...
                     ws.column_dimensions[col_letter].width = 25
                     
-                    for row_idx, name in enumerate(group, 1):
+                    for row_idx, name in enumerate(sorted_group, 1):
                         cell = ws.cell(row=row_idx, column=col_idx, value=name)
                         
                         # Apply font styling based on role (VPI=bold, Newbie=italic)
@@ -445,7 +443,7 @@ def main():
                             status_cell.fill = detail_fill
                     
                     # Add header with count
-                    header_cell = ws.cell(row=len(group) + 1, column=col_idx, value=f"({len(group)} чел.)")
+                    header_cell = ws.cell(row=len(sorted_group) + 1, column=col_idx, value=f"({len(sorted_group)} чел.)")
                     header_cell.font = Font(italic=True)
                 
                 # Format details sheet columns
