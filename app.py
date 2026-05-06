@@ -335,7 +335,7 @@ def main():
             # Generate groups
             result = generate_groups(
                 n=settings["num_groups"],
-                names=names,
+                all_people=names,
                 genders=genders,
                 newbies=newbies,
                 experts=experts,
