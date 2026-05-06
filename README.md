@@ -1,101 +1,127 @@
-# 🔥 GROUP DISTRIBUTOR!
+# 🔥 РАСХОДИМСЯ ПО ГРУППАМ!
 
-Web application for automatic balanced group distribution of participants.
+Веб-приложение для автоматического сбалансированного распределения участников по группам.
 
-## 📋 Description
+## 📋 Описание
 
-The application allows you to:
-- Add a list of participants (residents)
-- Automatically detect gender by name (for Russian names)
-- Assign roles: Regular, VPI (VIP), Newbie
-- Specify constraints (who should not be in the same group)
-- Generate balanced groups considering roles and genders
-- Export results to Excel
+Приложение позволяет:
+- Добавлять список участников
+- Автоматически определять пол по имени через Namsor API
+- Назначать роли: Обычный, ВПИ (VIP), Новичок
+- Указывать ограничения (кто не должен быть в одной группе)
+- Генерировать сбалансированные группы с учётом ролей и полов
+- Экспортировать результаты в Excel с форматированием
 
-## 🚀 Quick Start
+## 🚀 Быстрый старт
 
-### Install Dependencies
+### Установка зависимостей
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Launch Application
+### Запуск приложения
 
 ```bash
 streamlit run app.py
 ```
 
-The application will open in your browser at `http://localhost:8501`
+Приложение откроется в браузере по адресу `http://localhost:8501`
 
-## 📁 Project Structure
+## 📁 Структура проекта
 
 ```
 .
-├── app.py           # Main Streamlit application
-├── generator.py     # Logic for generating balanced groups
-├── names_db.py      # Database of Russian names for gender detection
-└── requirements.txt # Project dependencies
+├── app.py              # Основное Streamlit приложение
+├── generator.py        # Логика генерации сбалансированных групп
+├── gender_ai.py        # Определение пола через Namsor API
+├── test_generator.py   # Тесты для генератора групп
+├── test_names_db.py    # Тесты для базы имён
+├── requirements.txt    # Зависимости проекта
+└── README.md           # Документация
 ```
 
-## 🎯 Features
+## 🎯 Возможности
 
-### Bulk Participant Import
-Paste a list of names (one per line) for quick addition to the table.
+### Массовый импорт участников
+Вставьте список имён (по одному в строке) для быстрого добавления в таблицу.
 
-### Auto Gender Detection
-The application automatically detects participant gender by name using a Russian names database.
+### Автоматическое определение пола
+Приложение автоматически определяет пол участника по имени, используя API Namsor v2.
+Для имён, которые не удалось распознать, отображается статус «🔴 Не удалось определить пол».
 
-### Participant Roles
-- **Regular** — standard participant
-- **VPI** — VIP (Important Participant/Expert)
-- **Newbie** — new participant
+### Роли участников
+- **Обычный** — стандартный участник
+- **ВПИ** — важный участник/эксперт (отображается жирным шрифтом в Excel)
+- **Новичок** — новый участник (отображается курсивом в Excel)
 
-### Generation Settings
-- Number of groups
-- Strict role balance (even distribution)
-- Strict gender balance (even M/F distribution)
-- Seed for reproducible results
+### Настройки генерации
+- Количество групп
+- Строгий баланс ролей (равномерное распределение)
+- Строгий баланс полов (равномерное распределение M/F)
+- Seed для воспроизводимых результатов
+- Максимальное количество попыток генерации
 
-### Constraints (Boundaries)
-Specify pairs of participants who should not be in the same group:
+### Ограничения (Границы)
+Укажите пары участников, которые не должны быть в одной группе:
 ```
 Oleg S: Lesha Ch, Ivan P
 Anya K: Petya O, Masha I
 ```
 
-### Export
-Download the distribution result in Excel format (.xlsx)
+### Экспорт в Excel
+Скачайте результат распределения в формате Excel (.xlsx) с:
+- Отсортированными по алфавиту именами в группах
+- Жирным шрифтом для ВПИ
+- Курсивом для новичков
+- Дополнительным листом «Детали» с полной информацией (имя, пол, роль, статус, группа)
+- Подсветкой жёлтым и красным текстом для записей с неудачным определением пола
 
-## 📦 Dependencies
+## 📦 Зависимости
 
-- **streamlit** — web framework
-- **pandas** — data processing
-- **openpyxl** — Excel export
+- **streamlit** — веб-фреймворк
+- **pandas** — обработка данных
+- **openpyxl** — экспорт в Excel
+- **requests** — HTTP-запросы к Namsor API
 
-## 🔧 Technical Details
+## 🔧 Технические детали
 
-### Distribution Algorithm
-The generator uses random distribution with constraint checking:
-- Even distribution of participants across groups (difference ≤ 1)
-- Role balance between groups
-- Gender balance between groups
-- Personal constraints handling (who cannot be together)
+### Алгоритм распределения
+Генератор использует случайное распределение с проверкой ограничений:
+- Равномерное распределение участников по группам (разница ≤ 1)
+- Баланс ролей между группами
+- Баланс полов между группами
+- Обработка персональных ограничений (кто не может быть вместе)
+- Многопоточная генерация для ускорения подбора
 
-### Gender Detection
-The database contains common Russian names and their diminutive forms. For names not found in the database, gender must be specified manually.
+### Определение пола
+Приложение использует Namsor API v2 (`https://v2.namsor.com/NamSorAPIv2/api2/json/genderFull`) для определения пола по имени.
+API ключ задаётся через переменную окружения `NAMSOR_API_KEY`.
 
-## 📝 Usage Example
+Статусы определения пола:
+- «Пол определён через ИИ» — успешно
+- «🔴 Не удалось определить пол» — ошибка API или нераспознанное имя
 
-1. Open the application: `streamlit run app.py`
-2. Paste the list of names in the bulk import field
-3. Click "➕ Add to Table"
-4. Edit gender and roles in the table if needed
-5. Specify constraints in the "Boundaries" field
-6. Configure number of groups and balance settings
-7. Click "🚀 DISTRIBUTE!"
-8. Download the result as Excel
+### Воспроизводимость результатов
+При указании seed используется детерминированная генерация случайных чисел, что позволяет получать одинаковые результаты при повторной генерации с теми же параметрами.
 
-## 📄 License
+## 📝 Пример использования
+
+1. Откройте приложение: `streamlit run app.py`
+2. Вставьте список имён в поле массового импорта
+3. Нажмите «➕ Добавить в таблицу»
+4. При необходимости отредактируйте пол и роли в таблице
+5. Укажите ограничения в поле «Границы»
+6. Настройте количество групп и параметры баланса
+7. Нажмите «🚀 РАСХОДИМСЯ!»
+8. Скачайте результат в Excel
+
+## ⚙️ Переменные окружения
+
+| Переменная | Описание |
+|------------|----------|
+| `NAMSOR_API_KEY` | API ключ для сервиса Namsor (опционально) |
+
+## 📄 Лицензия
 
 MIT
