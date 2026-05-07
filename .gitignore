@@ -1,1 +1,35 @@
-Nothing should be ignored since only a README.md file was modified and no build artifacts, dependencies, or temp files were present in the changes.
+```
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Testing
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies
+.venv/
+venv/
+.mypy_cache/
+```
