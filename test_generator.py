@@ -344,76 +344,179 @@ class TestRunAttempt:
 class TestLimitConstraint:
     """Tests for LimitConstraint dataclass."""
 
-    def test_create_pair_constraint(self):
-        """Test creating a pair constraint."""
-        constraint = LimitConstraint.from_pair("Alice", "Bob")
+    def test_create_many_to_many_constraint(self):
+        """Test creating a many-to-many constraint."""
+        constraint = LimitConstraint.create_many_to_many(["Alice", "Bob"])
         assert constraint.members == frozenset(["Alice", "Bob"])
+        assert constraint.constraint_type == "many_to_many"
+        assert constraint.priority == 0
+        assert constraint.source is None
+        assert constraint.targets == frozenset()
+
+    def test_create_many_to_many_constraint_three_members(self):
+        """Test creating a many-to-many constraint with 3 members."""
+        constraint = LimitConstraint.create_many_to_many(["Alice", "Bob", "Charlie"])
+        assert constraint.members == frozenset(["Alice", "Bob", "Charlie"])
+        assert constraint.constraint_type == "many_to_many"
         assert constraint.priority == 0
 
-    def test_create_pair_constraint_with_priority(self):
-        """Test creating a pair constraint with custom priority."""
-        constraint = LimitConstraint.from_pair("Alice", "Bob", priority=5)
-        assert constraint.members == frozenset(["Alice", "Bob"])
+    def test_create_one_to_many_constraint(self):
+        """Test creating a one-to-many constraint."""
+        constraint = LimitConstraint.create_one_to_many("Alice", ["Bob", "Charlie"])
+        assert constraint.members == frozenset(["Alice", "Bob", "Charlie"])
+        assert constraint.constraint_type == "one_to_many"
+        assert constraint.source == "Alice"
+        assert constraint.targets == frozenset(["Bob", "Charlie"])
+        assert constraint.priority == 0
+
+    def test_create_one_to_many_constraint_with_priority(self):
+        """Test creating a one-to-many constraint with custom priority."""
+        constraint = LimitConstraint.create_one_to_many("Alice", ["Bob"], priority=5)
         assert constraint.priority == 5
 
-    def test_create_group_constraint(self):
-        """Test creating a group constraint (3+ members)."""
-        constraint = LimitConstraint.from_group(["Alice", "Bob", "Charlie"])
-        assert constraint.members == frozenset(["Alice", "Bob", "Charlie"])
-        assert constraint.priority == 1  # Default priority for 3+ members
+    def test_get_forbidden_pairs_many_to_many(self):
+        """Test getting forbidden pairs from many-to-many constraint."""
+        constraint = LimitConstraint.create_many_to_many(["Alice", "Bob", "Charlie"])
+        pairs = constraint.get_forbidden_pairs()
+        assert ("Alice", "Bob") in pairs
+        assert ("Alice", "Charlie") in pairs
+        assert ("Bob", "Charlie") in pairs
+        assert len(pairs) == 3
 
-    def test_create_group_constraint_with_priority(self):
-        """Test creating a group constraint with custom priority."""
-        constraint = LimitConstraint.from_group(["Alice", "Bob", "Charlie"], priority=2)
-        assert constraint.members == frozenset(["Alice", "Bob", "Charlie"])
-        assert constraint.priority == 2
+    def test_get_forbidden_pairs_one_to_many(self):
+        """Test getting forbidden pairs from one-to-many constraint."""
+        constraint = LimitConstraint.create_one_to_many("Alice", ["Bob", "Charlie"])
+        pairs = constraint.get_forbidden_pairs()
+        # Only Alice-Bob and Alice-Charlie are forbidden, not Bob-Charlie
+        assert ("Alice", "Bob") in pairs
+        assert ("Alice", "Charlie") in pairs
+        assert ("Bob", "Charlie") not in pairs
+        assert len(pairs) == 2
 
-    def test_is_violated_by_true(self):
-        """Test constraint violation detection."""
-        constraint = LimitConstraint.from_group(["Alice", "Bob", "Charlie"])
-        group_set = {"Alice", "Bob", "Charlie", "David"}
-        # With 2 groups, max_together defaults to ceil(3/2)=2, so 3 members violates
-        assert constraint.is_violated_by(group_set, num_groups=2) is True
-
-    def test_is_violated_by_false(self):
-        """Test constraint non-violation."""
-        constraint = LimitConstraint.from_group(["Alice", "Bob", "Charlie"])
+    def test_is_violated_by_many_to_many_true(self):
+        """Test many-to-many constraint violation detection."""
+        constraint = LimitConstraint.create_many_to_many(["Alice", "Bob", "Charlie"])
         group_set = {"Alice", "Bob", "David"}
-        # With 2 groups, max_together defaults to ceil(3/2)=2, so 2 members is OK
-        assert constraint.is_violated_by(group_set, num_groups=2) is False
+        # 2 members from the constraint in same group = violation
+        assert constraint.is_violated_by(group_set) is True
 
-    def test_invalid_group_constraint(self):
-        """Test that group constraint requires at least 2 members."""
+    def test_is_violated_by_many_to_many_false(self):
+        """Test many-to-many constraint non-violation."""
+        constraint = LimitConstraint.create_many_to_many(["Alice", "Bob", "Charlie"])
+        group_set = {"Alice", "David", "Eve"}
+        # Only 1 member from the constraint = OK
+        assert constraint.is_violated_by(group_set) is False
+
+    def test_is_violated_by_one_to_many_true(self):
+        """Test one-to-many constraint violation detection."""
+        constraint = LimitConstraint.create_one_to_many("Alice", ["Bob", "Charlie"])
+        group_set = {"Alice", "Bob", "David"}
+        # Alice and Bob together = violation
+        assert constraint.is_violated_by(group_set) is True
+
+    def test_is_violated_by_one_to_many_false(self):
+        """Test one-to-many constraint non-violation."""
+        constraint = LimitConstraint.create_one_to_many("Alice", ["Bob", "Charlie"])
+        group_set = {"Bob", "Charlie", "David"}
+        # Bob and Charlie together without Alice = OK
+        assert constraint.is_violated_by(group_set) is False
+
+    def test_is_violated_by_one_to_many_source_only(self):
+        """Test one-to-many constraint when only source is present."""
+        constraint = LimitConstraint.create_one_to_many("Alice", ["Bob", "Charlie"])
+        group_set = {"Alice", "David", "Eve"}
+        # Only Alice, no targets = OK
+        assert constraint.is_violated_by(group_set) is False
+
+    def test_invalid_many_to_many_constraint(self):
+        """Test that many-to-many constraint requires at least 2 members."""
         with pytest.raises(ValueError, match="at least 2"):
-            LimitConstraint.from_group(["Alice"])
+            LimitConstraint.create_many_to_many(["Alice"])
+
+    def test_invalid_one_to_many_constraint_no_targets(self):
+        """Test that one-to-many constraint requires at least 1 target."""
+        with pytest.raises(ValueError, match="at least 1"):
+            LimitConstraint.create_one_to_many("Alice", [])
+
+    def test_invalid_one_to_many_source_in_targets(self):
+        """Test that one-to-many constraint rejects source in targets."""
+        with pytest.raises(ValueError, match="Source cannot be in targets"):
+            LimitConstraint.create_one_to_many("Alice", ["Alice", "Bob"])
 
 
 class TestMultiMemberLimits:
     """Tests for multi-member limit constraints."""
 
     def test_verify_three_member_limit_violated(self):
-        """Test verification detects 3-member limit violation."""
+        """Test verification detects 3-member many-to-many limit violation."""
         groups = [["Alice", "Bob", "Charlie"], ["David", "Eve"]]
-        limits = [LimitConstraint.from_group(["Alice", "Bob", "Charlie"])]
+        limits = [LimitConstraint.create_many_to_many(["Alice", "Bob", "Charlie"])]
         roles = {p: "regular" for p in ["Alice", "Bob", "Charlie", "David", "Eve"]}
         genders = {p: "M" for p in ["Alice", "Bob", "Charlie", "David", "Eve"]}
         
         assert verify_groups(groups, limits, roles, genders) is False
 
     def test_verify_three_member_limit_respected(self):
-        """Test verification passes when 3-member limit is respected."""
-        groups = [["Alice", "Bob", "David"], ["Charlie", "Eve"]]
-        limits = [LimitConstraint.from_group(["Alice", "Bob", "Charlie"])]
-        roles = {p: "regular" for p in ["Alice", "Bob", "Charlie", "David", "Eve"]}
-        genders = {p: "M" for p in ["Alice", "Bob", "Charlie", "David", "Eve"]}
+        """Test verification passes when 3-member many-to-many limit is respected."""
+        # Alice, Bob, Charlie must all be in different groups
+        # Group 1: Alice + David, Group 2: Bob + Charlie would still violate (Bob+Charlie together)
+        # So we need 3 groups for a proper test, or arrange so no two are together
+        groups = [["Alice", "David"], ["Bob", "Eve"], ["Charlie", "Frank"]]
+        limits = [LimitConstraint.create_many_to_many(["Alice", "Bob", "Charlie"])]
+        roles = {p: "regular" for p in ["Alice", "Bob", "Charlie", "David", "Eve", "Frank"]}
+        genders = {p: "M" for p in ["Alice", "Bob", "Charlie", "David", "Eve", "Frank"]}
         
         assert verify_groups(groups, limits, roles, genders) is True
 
+    def test_verify_one_to_many_limit_violated(self):
+        """Test verification detects one-to-many limit violation."""
+        groups = [["Alice", "Bob", "David"], ["Charlie", "Eve"]]
+        # Alice cannot be with Bob or Charlie
+        limits = [LimitConstraint.create_one_to_many("Alice", ["Bob", "Charlie"])]
+        roles = {p: "regular" for p in ["Alice", "Bob", "Charlie", "David", "Eve"]}
+        genders = {p: "M" for p in ["Alice", "Bob", "Charlie", "David", "Eve"]}
+        
+        # Alice and Bob are together - violation
+        assert verify_groups(groups, limits, roles, genders) is False
+
+    def test_verify_one_to_many_limit_respected(self):
+        """Test verification passes when one-to-many limit is respected."""
+        # Alice cannot be with Bob or Charlie, but Bob and Charlie can be together
+        # Use 3 groups to ensure size balance (2 each)
+        groups = [["Alice", "David"], ["Bob", "Eve"], ["Charlie", "Frank"]]
+        limits = [LimitConstraint.create_one_to_many("Alice", ["Bob", "Charlie"])]
+        roles = {p: "regular" for p in ["Alice", "Bob", "Charlie", "David", "Eve", "Frank"]}
+        genders = {p: "M" for p in ["Alice", "Bob", "Charlie", "David", "Eve", "Frank"]}
+        
+        # Alice is separate from Bob and Charlie - OK
+        assert verify_groups(groups, limits, roles, genders) is True
+
     def test_generate_with_three_member_limit(self):
-        """Test group generation respects 3-member limit."""
+        """Test group generation respects 3-member many-to-many limit."""
+        names = ["Alice", "Bob", "Charlie", "David", "Eve", "Frank", "George"]
+        genders = {p: "M" for p in names}
+        # With 3 members who all must be separate, we need at least 3 groups
+        limits = [LimitConstraint.create_many_to_many(["Alice", "Bob", "Charlie"])]
+        
+        result = generate_groups(
+            n=3,  # Need 3 groups for 3 people who must all be separate
+            all_people=names,
+            genders=genders,
+            limits=limits,
+            seed=42
+        )
+        
+        # Verify no two of Alice, Bob, Charlie are in the same group
+        for group in result.groups:
+            count = sum(1 for p in group if p in ["Alice", "Bob", "Charlie"])
+            assert count <= 1
+
+    def test_generate_with_one_to_many_limit(self):
+        """Test group generation respects one-to-many limit."""
         names = ["Alice", "Bob", "Charlie", "David", "Eve", "Frank"]
         genders = {p: "M" for p in names}
-        limits = [LimitConstraint.from_group(["Alice", "Bob", "Charlie"])]
+        # Alice cannot be with Bob or Charlie, but Bob and Charlie can be together
+        limits = [LimitConstraint.create_one_to_many("Alice", ["Bob", "Charlie"])]
         
         result = generate_groups(
             n=2,
@@ -423,18 +526,19 @@ class TestMultiMemberLimits:
             seed=42
         )
         
-        # Verify Alice, Bob, and Charlie are not all in the same group
+        # Verify Alice is not in the same group as Bob or Charlie
         for group in result.groups:
-            count = sum(1 for p in group if p in ["Alice", "Bob", "Charlie"])
-            assert count <= 2
+            if "Alice" in group:
+                assert "Bob" not in group
+                assert "Charlie" not in group
 
-    def test_mixed_pair_and_group_limits(self):
-        """Test generation with both pair and group limits."""
+    def test_mixed_many_to_many_and_one_to_many_limits(self):
+        """Test generation with both many-to-many and one-to-many limits."""
         names = ["Alice", "Bob", "Charlie", "David", "Eve", "Frank"]
         genders = {p: "M" for p in names}
         limits = [
-            LimitConstraint.from_pair("Alice", "Bob"),  # Pair limit (priority 0)
-            LimitConstraint.from_group(["Charlie", "David", "Eve"]),  # Group limit (priority 1)
+            LimitConstraint.create_many_to_many(["Alice", "Bob"]),  # Alice and Bob separate
+            LimitConstraint.create_one_to_many("Charlie", ["David", "Eve"]),  # Charlie not with David or Eve
         ]
         
         result = generate_groups(
@@ -448,6 +552,10 @@ class TestMultiMemberLimits:
         # Verify Alice and Bob are not in the same group
         for group in result.groups:
             assert not ("Alice" in group and "Bob" in group)
+            # Verify Charlie is not with David or Eve
+            if "Charlie" in group:
+                assert "David" not in group
+                assert "Eve" not in group
             # Verify Charlie, David, Eve are not all in the same group
             count = sum(1 for p in group if p in ["Charlie", "David", "Eve"])
             assert count <= 2
@@ -455,8 +563,8 @@ class TestMultiMemberLimits:
     def test_priority_ordering(self):
         """Test that lower priority number means higher priority."""
         # Create constraints with different priorities
-        c1 = LimitConstraint.from_pair("Alice", "Bob", priority=0)  # Higher priority
-        c2 = LimitConstraint.from_group(["Charlie", "David", "Eve"], priority=1)  # Lower priority
+        c1 = LimitConstraint.create_many_to_many(["Alice", "Bob"], priority=0)  # Higher priority
+        c2 = LimitConstraint.create_many_to_many(["Charlie", "David", "Eve"], priority=1)  # Lower priority
         
         constraints = [c2, c1]  # Unsorted
         constraints.sort(key=lambda c: c.priority)
@@ -488,7 +596,7 @@ class TestMultiMemberLimits:
         names = ["Alice", "Bob", "Charlie", "David", "Eve", "Frank"]
         genders = {p: "M" for p in names}
         # Constraint: Alice, Bob, Charlie should be distributed (max 1 per group with 3 groups)
-        limits = [LimitConstraint.from_group(["Alice", "Bob", "Charlie"])]
+        limits = [LimitConstraint.create_many_to_many(["Alice", "Bob", "Charlie"])]
         
         result = generate_groups(
             n=3,
@@ -510,7 +618,7 @@ class TestMultiMemberLimits:
         names = [f"Person{i}" for i in range(8)]
         genders = {p: "M" for p in names}
         constrained = ["Person0", "Person1", "Person2", "Person3", "Person4"]
-        limits = [LimitConstraint.from_group(constrained)]
+        limits = [LimitConstraint.create_many_to_many(constrained)]
         
         result = generate_groups(
             n=2,
@@ -531,7 +639,7 @@ class TestMultiMemberLimits:
         names = ["Alice", "Bob", "Charlie", "David", "Eve", "Frank"]
         genders = {p: "M" for p in names}
         # Allow up to 2 of these 3 members together
-        limits = [LimitConstraint.from_group(["Alice", "Bob", "Charlie"], max_together=2)]
+        limits = [LimitConstraint.create_many_to_many(["Alice", "Bob", "Charlie"], max_together=2)]
         
         result = generate_groups(
             n=2,
@@ -554,7 +662,7 @@ class TestMultiMemberLimits:
         names = ["A", "B", "C", "D", "E", "F", "G", "H"]
         genders = {p: "M" for p in names}
         constrained = ["A", "B", "C", "D"]
-        limits = [LimitConstraint.from_group(constrained)]
+        limits = [LimitConstraint.create_many_to_many(constrained)]
         
         result = generate_groups(
             n=2,
