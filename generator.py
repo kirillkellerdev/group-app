@@ -4,68 +4,116 @@
 import random
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from typing import Optional, Union, Literal
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-@dataclass
+@dataclass(frozen=True, eq=True)
 class LimitConstraint:
-    """Represents a limit constraint with priority.
+    """Represents a limit constraint with type and priority.
+    
+    There are two types of constraints:
+    
+    1. MANY_TO_MANY: All members in this constraint cannot be in the same group.
+       Any subset of 2 or more members from this group is forbidden.
+       Example: A-B-C means no two of {A,B,C} can be together.
+       
+    2. ONE_TO_MANY: The 'source' member cannot be with any of the 'targets',
+       but targets can be together.
+       Example: A -> B,C means A cannot be with B or C, but B and C can be together.
     
     Attributes:
-        members: Set of participant names that have a restriction
-        priority: Lower number = higher priority (2-member limits have priority 0 by default)
-        max_together: Maximum number of these members allowed in the same group.
-                     If None, calculated as max(1, num_groups - 1) when applied,
-                     meaning ideally only 1 per group, but relaxed if members > groups.
+        members: Set of all participant names involved in this constraint
+        constraint_type: Either 'many_to_many' or 'one_to_many'
+        source: For one_to_many, the person who cannot be with others (None for many_to_many)
+        targets: For one_to_many, the set of people the source cannot be with (empty for many_to_many)
+        priority: Lower number = higher priority
     """
     members: frozenset
+    constraint_type: Literal['many_to_many', 'one_to_many']
+    source: Optional[str] = None
+    targets: frozenset = frozenset()
     priority: int = 0
-    max_together: Optional[int] = None
     
     @classmethod
-    def from_pair(cls, person1: str, person2: str, priority: int = 0) -> 'LimitConstraint':
-        """Create a constraint from two people."""
-        return cls(members=frozenset([person1, person2]), priority=priority, max_together=1)
-    
-    @classmethod
-    def from_group(cls, members: list[str], priority: int = 1, max_together: Optional[int] = None) -> 'LimitConstraint':
-        """Create a constraint from multiple people (3+).
+    def create_many_to_many(cls, members: list[str], priority: int = 0) -> 'LimitConstraint':
+        """Create a many-to-many constraint.
+        
+        All members cannot be in the same group. Any pair or subset is forbidden.
         
         Args:
-            members: List of member names
+            members: List of member names (at least 2)
             priority: Priority level (lower = higher priority)
-            max_together: Maximum members allowed together. If None, will be calculated
-                         based on number of groups at application time.
         """
         if len(members) < 2:
-            raise ValueError("A limit constraint must have at least 2 members")
-        return cls(members=frozenset(members), priority=priority, max_together=max_together)
+            raise ValueError("A many-to-many constraint must have at least 2 members")
+        return cls(
+            members=frozenset(members),
+            constraint_type='many_to_many',
+            source=None,
+            targets=frozenset(),
+            priority=priority
+        )
     
-    def get_max_together(self, num_groups: int) -> int:
-        """Calculate maximum members allowed together based on group count.
+    @classmethod
+    def create_one_to_many(cls, source: str, targets: list[str], priority: int = 0) -> 'LimitConstraint':
+        """Create a one-to-many constraint.
         
-        If max_together is set, use it. Otherwise, calculate based on pigeonhole principle:
-        - If members <= num_groups: ideally 1 per group (max_together=1)
-        - If members > num_groups: must allow some grouping, so ceil(members/num_groups)
+        The source cannot be with any target, but targets can be together.
+        
+        Args:
+            source: The person who cannot be with others
+            targets: List of people the source cannot be with (at least 1)
+            priority: Priority level (lower = higher priority)
         """
-        if self.max_together is not None:
-            return self.max_together
-        
-        # Calculate ideal distribution
-        # If we have N members and G groups, at least one group must have ceil(N/G) members
-        import math
-        return max(1, math.ceil(len(self.members) / num_groups))
+        if not targets:
+            raise ValueError("A one-to-many constraint must have at least 1 target")
+        all_members = [source] + list(targets)
+        if len(set(all_members)) != len(all_members):
+            raise ValueError("Source cannot be in targets")
+        return cls(
+            members=frozenset(all_members),
+            constraint_type='one_to_many',
+            source=source,
+            targets=frozenset(targets),
+            priority=priority
+        )
     
-    def is_violated_by(self, group_set: set[str], num_groups: int) -> bool:
+    def get_forbidden_pairs(self) -> set[tuple[str, str]]:
+        """Get all forbidden pairs from this constraint.
+        
+        Returns a set of (person1, person2) tuples where person1 < person2 alphabetically.
+        """
+        pairs = set()
+        if self.constraint_type == 'many_to_many':
+            # All pairs are forbidden
+            members_list = sorted(self.members)
+            for i, m1 in enumerate(members_list):
+                for m2 in members_list[i+1:]:
+                    pairs.add((m1, m2))
+        elif self.constraint_type == 'one_to_many':
+            # Only source-target pairs are forbidden
+            if self.source:
+                for target in self.targets:
+                    pair = tuple(sorted([self.source, target]))
+                    pairs.add(pair)
+        return pairs
+    
+    def is_violated_by(self, group_set: set[str]) -> bool:
         """Check if this constraint is violated by a group.
         
-        A constraint is violated if more than the allowed number of members are in the group.
-        The allowed number is calculated based on the total number of groups.
+        For many_to_many: violated if 2+ members are in the group
+        For one_to_many: violated if source AND any target are in the group
         """
-        max_allowed = self.get_max_together(num_groups)
-        members_in_group = len(self.members & group_set)
-        return members_in_group > max_allowed
+        if self.constraint_type == 'many_to_many':
+            # Violated if 2 or more members are in the same group
+            return len(self.members & group_set) >= 2
+        elif self.constraint_type == 'one_to_many':
+            # Violated if source is in group AND any target is also in group
+            if self.source and self.source in group_set:
+                return bool(self.targets & group_set)
+            return False
+        return False
 
 
 @dataclass
@@ -93,7 +141,7 @@ def verify_groups(
     Args:
         groups: List of groups, each containing participant names
         limits: Either a dictionary mapping participants to lists of people they can't be grouped with,
-                or a list of LimitConstraint objects for multi-member constraints with priority
+                or a list of LimitConstraint objects (new format with many_to_many and one_to_many types)
         roles: Dictionary mapping participants to their roles
         genders: Dictionary mapping participants to their genders
         strict_r: Whether to enforce strict role balance
@@ -118,17 +166,17 @@ def verify_groups(
     if isinstance(limits, list):
         # New format: list of LimitConstraint objects
         limit_constraints = limits
-        # Also build pairwise conflicts for 2-member constraints
+        # Build pairwise conflicts from all constraints
         for constraint in limit_constraints:
-            if len(constraint.members) == 2:
-                members_list = list(constraint.members)
-                conflicts[members_list[0]].add(members_list[1])
-                conflicts[members_list[1]].add(members_list[0])
+            for pair in constraint.get_forbidden_pairs():
+                conflicts[pair[0]].add(pair[1])
+                conflicts[pair[1]].add(pair[0])
     else:
         # Legacy format: dict[str, list[str]]
         for person, others in limits.items():
             for other in others:
                 conflicts[person].add(other)
+                conflicts[other].add(person)
     
     # Check no pairwise conflicts within groups
     for group in groups:
@@ -137,16 +185,12 @@ def verify_groups(
             if conflicts[person] & group_set:
                 return False
     
-    # Check multi-member constraints (members should be distributed across groups)
-    num_groups = len(groups)
+    # Check multi-member constraints using is_violated_by
     for constraint in limit_constraints:
-        if len(constraint.members) >= 3:
-            max_allowed = constraint.get_max_together(num_groups)
-            for group in groups:
-                group_set = set(group)
-                members_in_group = len(constraint.members & group_set)
-                if members_in_group > max_allowed:
-                    return False
+        for group in groups:
+            group_set = set(group)
+            if constraint.is_violated_by(group_set):
+                return False
     
     # Check role balance
     if strict_r:
@@ -155,9 +199,9 @@ def verify_groups(
             role_totals[role] += 1
         
         role_targets = {
-            role: [base + (1 if i < remainder else 0) for i in range(num_groups)]
+            role: [base + (1 if i < remainder else 0) for i in range(len(groups))]
             for role, count in role_totals.items()
-            for base, remainder in [divmod(count, num_groups)]
+            for base, remainder in [divmod(count, len(groups))]
         }
         
         for i, group in enumerate(groups):
@@ -176,9 +220,9 @@ def verify_groups(
             gender_totals[gender] += 1
         
         gender_targets = {
-            gender: [base + (1 if i < remainder else 0) for i in range(num_groups)]
+            gender: [base + (1 if i < remainder else 0) for i in range(len(groups))]
             for gender, count in gender_totals.items()
-            for base, remainder in [divmod(count, num_groups)]
+            for base, remainder in [divmod(count, len(groups))]
         }
         
         for i, group in enumerate(groups):
@@ -234,11 +278,8 @@ def _run_attempt(seed: int, config: dict) -> Optional[GroupingResult]:
         group_set = set(groups[group_idx])
         group_set.add(person)
         for constraint in limit_constraints:
-            if len(constraint.members) >= 3:
-                max_allowed = constraint.get_max_together(num_groups)
-                members_in_group = len(constraint.members & group_set)
-                if members_in_group > max_allowed:
-                    return False
+            if constraint.is_violated_by(group_set):
+                return False
         return True
     
     # Assign participants to groups
@@ -315,11 +356,8 @@ def _run_attempt(seed: int, config: dict) -> Optional[GroupingResult]:
             group_set.discard(p1 if group_idx == g1 else p2)
             group_set.add(person)
             for constraint in limit_constraints:
-                if len(constraint.members) >= 3:
-                    max_allowed = constraint.get_max_together(num_groups)
-                    members_in_group = len(constraint.members & group_set)
-                    if members_in_group > max_allowed:
-                        return True
+                if constraint.is_violated_by(group_set):
+                    return True
             return False
         
         if would_violate_multi_member(g2, p1):
@@ -479,18 +517,17 @@ def generate_groups(
         # New format: list of LimitConstraint objects
         limits_input = limits
         limit_constraints = limits
-        # Build pairwise conflicts from 2-member constraints
+        # Validate all members exist and build pairwise conflicts
         for constraint in limit_constraints:
             if not all(member in all_set for member in constraint.members):
                 missing = [m for m in constraint.members if m not in all_set]
                 raise ValueError(
                     f"Имя '{missing[0]}' отсутствует в списке участников."
                 )
-            # For 2-member constraints, add to pairwise conflicts
-            if len(constraint.members) == 2:
-                members_list = list(constraint.members)
-                conflicts[members_list[0]].add(members_list[1])
-                conflicts[members_list[1]].add(members_list[0])
+            # Build pairwise conflicts from all constraint types
+            for pair in constraint.get_forbidden_pairs():
+                conflicts[pair[0]].add(pair[1])
+                conflicts[pair[1]].add(pair[0])
     else:
         # Legacy format: dict[str, list[str]]
         limits_input = limits
@@ -504,7 +541,7 @@ def generate_groups(
                     conflicts[person].add(other)
                     conflicts[other].add(person)
                     # Also create a LimitConstraint for each pair with high priority
-                    constraint = LimitConstraint.from_pair(person, other, priority=0)
+                    constraint = LimitConstraint.create_many_to_many([person, other], priority=0)
                     # Avoid duplicates
                     if constraint not in limit_constraints:
                         limit_constraints.append(constraint)

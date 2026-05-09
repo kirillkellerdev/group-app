@@ -148,21 +148,49 @@ def auto_detect_genders() -> None:
         del st.session_state[WIDGET_KEY]
 
 
-def parse_limits(limits_text: str) -> dict[str, list[str]]:
-    """Parse limits from text input.
+def parse_limits(limits_text: str) -> list:
+    """Parse limits from text input into LimitConstraint objects.
     
-    Format: "Name: Other1, Other2" per line
+    Supports two formats:
+    1. Many-to-many (default): "Name1, Name2, Name3" - all cannot be together
+       Any subset of 2+ members from this group is forbidden.
+       
+    2. One-to-many: "Name1 -> Name2, Name3" - Name1 cannot be with Name2 or Name3,
+       but Name2 and Name3 can be together.
+    
+    Each constraint should be on a separate line.
     """
-    limits = {}
+    from generator import LimitConstraint
+    
+    constraints = []
     for line in limits_text.splitlines():
-        if ":" not in line:
+        line = line.strip()
+        if not line:
             continue
-        key, value = line.split(":", 1)
-        key_clean = key.strip()
-        if not key_clean:
-            continue
-        limits[key_clean] = [x.strip() for x in value.split(',') if x.strip()]
-    return limits
+        
+        # Check for one-to-many format (with arrow)
+        if '->' in line:
+            parts = line.split('->', 1)
+            source = parts[0].strip()
+            targets_str = parts[1].strip()
+            targets = [t.strip() for t in targets_str.split(',') if t.strip()]
+            if source and targets:
+                try:
+                    constraint = LimitConstraint.create_one_to_many(source, targets)
+                    constraints.append(constraint)
+                except ValueError as e:
+                    pass  # Skip invalid constraints
+        else:
+            # Many-to-many format (comma-separated list)
+            members = [m.strip() for m in line.split(',') if m.strip()]
+            if len(members) >= 2:
+                try:
+                    constraint = LimitConstraint.create_many_to_many(members)
+                    constraints.append(constraint)
+                except ValueError as e:
+                    pass  # Skip invalid constraints
+    
+    return constraints
 
 
 def render_resident_table() -> pd.DataFrame:
@@ -292,26 +320,27 @@ def main():
     st.subheader("🌍 Границы")
     st.markdown("""
     **Как работают ограничения:**  
-    Укажите пары или группы людей, которые НЕ должны быть в одной группе.  
-    Формат: `Имя: Имя1, Имя2, ...` (каждое ограничение с новой строки).
+    
+    Есть два типа ограничений:
+    
+    1. **Многие-ко-многим** (по умолчанию): перечислите имена через запятую — никакие двое из этой группы не должны быть вместе.
+       - Пример: `Олег С, Леша Ч, Петя И` → все трое должны быть в разных группах
+    
+    2. **Один-ко-многим**: используйте стрелку `->` чтобы указать, что один человек не должен быть с другими, но те могут быть вместе.
+       - Пример: `Аня К -> Петя О, Маша И` → Аня не должна быть с Петей или Машей, но Петя и Маша могут быть вместе
     
     **Примеры:**
-    - *Пара:* `Олег С: Леша Ч` → Олег и Леша будут в разных группах
-    - *Несколько человек:* `Аня К: Петя О, Маша И, Саша В` → Аня будет в отдельной группе от всех троих
-    - *Взаимные ограничения:* Если хотите, чтобы несколько человек поочерёдно не были вместе, укажите это для каждого:
-      ```
-      Иван П: Мария К, Анна В
-      Мария К: Иван П, Анна В
-      Анна В: Иван П, Мария К
-      ```
+    - *Пара (многие-ко-многим):* `Олег С, Леша Ч` → Олег и Леша будут в разных группах
+    - *Трое (многие-ко-многим):* `Аня К, Петя О, Маша И` → все трое в разных группах
+    - *Один-ко-многим:* `Дмитрий К -> Елена В, Наталья С` → Дмитрий не должен быть с Еленой или Натальей, но Елена и Наталья могут быть вместе
     """)
     limits_text = st.text_area(
-        "Введите ограничения (Имя: Через запятую)",
-        placeholder="""Примеры ограничений (формат: Кто: Не должен быть с кем):
-Олег С: Леша Ч                          ← пара не должна быть вместе
-Аня К: Петя О, Маша И, Саша В           ← один человек не должен быть с несколькими другими
-Иван Д: Ольга М                         ← ещё одна пара
-Дмитрий К: Елена В, Наталья С, Юрий Т   ← один человек отдельно от трёх других""",
+        "Введите ограничения",
+        placeholder="""Примеры ограничений:
+Олег С, Леша Ч                          ← многие-ко-многим: пара не должна быть вместе
+Аня К, Петя О, Маша И                   ← многие-ко-многим: все трое в разных группах
+Дмитрий К -> Елена В, Наталья С         ← один-ко-многим: Дмитрий отдельно от Елены и Натальи
+Иван Д -> Ольга М                       ← один-ко-многим: Иван не должен быть с Ольгой""",
         height=240
     )
     
