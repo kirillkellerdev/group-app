@@ -424,82 +424,114 @@ def main():
                 
                 st.write(", ".join(formatted_names), unsafe_allow_html=True)
             
-            # Export to Excel with formatting (bold/italic only, no colors)
+            # Export to Excel with professional formatting on a single sheet
             if result.groups:
-                # Create styled Excel using openpyxl
                 from openpyxl import Workbook
-                from openpyxl.styles import Font, PatternFill
+                from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
                 
                 wb = Workbook()
                 ws = wb.active
                 ws.title = "Группы"
                 
-                # Create a second sheet for detailed info with status
-                ws_details = wb.create_sheet(title="Детали")
-                ws_details.append(["Имя", "Пол", "Роль", "Статус", "Группа"])
-                
-                # Build a lookup for status from the current dataframe
-                status_lookup = {}
+                # Build lookups from the current dataframe
                 role_lookup = {}
                 gender_lookup = {}
                 current_df = st.session_state[DATA_KEY]
                 for _, row in current_df.iterrows():
                     name = row["Имя"].strip() if isinstance(row["Имя"], str) else str(row["Имя"]).strip()
-                    status_lookup[name] = row.get("🚦 Статус", "")
                     role_lookup[name] = row.get("Роль", "Обычный")
                     gender_lookup[name] = row.get("Пол", "M")
                 
-                # Write data and apply formatting
-                max_len = max(len(g) for g in result.groups) if result.groups else 0
-                for col_idx, group in enumerate(result.groups, 1):
-                    # Sort group members alphabetically for Excel export
+                # Define styles
+                title_font = Font(size=16, bold=True)
+                header_font = Font(size=12, bold=True)
+                vpi_font = Font(bold=True)
+                newbie_font = Font(italic=True)
+                vpi_newbie_font = Font(bold=True, italic=True)
+                
+                thin_border = Border(
+                    left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin')
+                )
+                
+                center_alignment = Alignment(horizontal='center', vertical='center')
+                left_alignment = Alignment(horizontal='left', vertical='center')
+                
+                # Calculate layout: each group gets 2 columns (title column + names column)
+                # Group title spans both columns
+                current_row = 1
+                
+                for group_idx, group in enumerate(result.groups, 1):
+                    # Sort group members alphabetically
                     sorted_group = sorted(group, key=lambda x: x.strip().lower())
                     
-                    col_letter = chr(64 + col_idx)  # A, B, C, ...
-                    ws.column_dimensions[col_letter].width = 25
+                    # Column positions for this group (2 columns per group)
+                    title_col = (group_idx - 1) * 2 + 1
+                    names_col = title_col + 1
                     
-                    for row_idx, name in enumerate(sorted_group, 1):
-                        cell = ws.cell(row=row_idx, column=col_idx, value=name)
+                    # Set column widths
+                    ws.column_dimensions[chr(64 + title_col)].width = 5
+                    ws.column_dimensions[chr(64 + names_col)].width = 30
+                    
+                    # Add group title "N МАЛЫЕ ГРУППЫ" spanning both columns
+                    title_text = f"{group_idx} МАЛЫЕ ГРУППЫ"
+                    title_cell = ws.cell(row=current_row, column=title_col, value=title_text)
+                    title_cell.font = title_font
+                    title_cell.alignment = center_alignment
+                    title_cell.border = thin_border
+                    # Merge cells for title
+                    ws.merge_cells(
+                        start_row=current_row, 
+                        end_row=current_row, 
+                        start_column=title_col, 
+                        end_column=names_col
+                    )
+                    
+                    current_row += 1
+                    
+                    # Add column header "Группа N"
+                    header_text = f"Группа {group_idx}"
+                    header_cell = ws.cell(row=current_row, column=names_col, value=header_text)
+                    header_cell.font = header_font
+                    header_cell.alignment = left_alignment
+                    header_cell.border = thin_border
+                    
+                    current_row += 1
+                    
+                    # Add sorted member names
+                    for name in sorted_group:
+                        name_cell = ws.cell(row=current_row, column=names_col, value=name)
+                        name_cell.alignment = left_alignment
+                        name_cell.border = thin_border
                         
-                        # Apply font styling based on role (VPI=bold, Newbie=italic)
-                        font_style = Font()
-                        if name in experts:
-                            font_style = Font(bold=True)
-                        if name in newbies:
-                            font_style = Font(italic=True)
-                        if name in experts and name in newbies:
-                            font_style = Font(bold=True, italic=True)
-                        
-                        cell.font = font_style
-                        
-                        # Add to details sheet with status
+                        # Apply font styling based on role
                         name_stripped = name.strip()
-                        status = status_lookup.get(name_stripped, "")
-                        role = role_lookup.get(name_stripped, "Обычный")
-                        gender = gender_lookup.get(name_stripped, "M")
+                        is_vpi = name_stripped in experts
+                        is_newbie = name_stripped in newbies
                         
-                        # Determine if status indicates failure (red fill)
-                        is_failure = "Не удалось определить пол" in status
-                        detail_font = Font(color="FF0000" if is_failure else None)
-                        detail_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid") if is_failure else None
+                        if is_vpi and is_newbie:
+                            name_cell.font = vpi_newbie_font
+                        elif is_vpi:
+                            name_cell.font = vpi_font
+                        elif is_newbie:
+                            name_cell.font = newbie_font
                         
-                        ws_details.append([name_stripped, gender, role, status, col_idx])
-                        # Apply red font and yellow background for failed status
-                        status_cell = ws_details.cell(row=ws_details.max_row, column=4)
-                        if is_failure:
-                            status_cell.font = Font(color="FF0000")
-                            status_cell.fill = detail_fill
+                        current_row += 1
                     
-                    # Add header with count
-                    header_cell = ws.cell(row=len(sorted_group) + 1, column=col_idx, value=f"({len(sorted_group)} чел.)")
-                    header_cell.font = Font(italic=True)
+                    # Add empty row between groups for spacing (except after last group)
+                    if group_idx < len(result.groups):
+                        current_row += 1
                 
-                # Format details sheet columns
-                ws_details.column_dimensions["A"].width = 25
-                ws_details.column_dimensions["B"].width = 10
-                ws_details.column_dimensions["C"].width = 15
-                ws_details.column_dimensions["D"].width = 35
-                ws_details.column_dimensions["E"].width = 10
+                # Page setup for printing
+                ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+                ws.page_setup.paperSize = ws.PAPERSIZE_A4
+                ws.page_margins.left = 0.5
+                ws.page_margins.right = 0.5
+                ws.page_margins.top = 0.75
+                ws.page_margins.bottom = 0.75
+                ws.print_options.horizontalCentered = True
                 
                 output = io.BytesIO()
                 wb.save(output)
