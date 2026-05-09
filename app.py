@@ -4,6 +4,7 @@
 import sys
 import os
 import io
+import hashlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -14,7 +15,6 @@ from generator import generate_groups
 
 # Page configuration
 st.set_page_config(page_title="РАСХОДИМСЯ ПО ГРУППАМ!", layout="wide")
-st.title("🔥 РАСХОДИМСЯ ПО ГРУППАМ!")
 
 # Constants
 DATA_KEY = "residents_data"
@@ -22,10 +22,56 @@ WIDGET_KEY = "residents_widget"
 DEFAULT_COLUMNS = ["Имя", "Пол", "Роль", "🚦 Статус"]
 ROLE_OPTIONS = ["Обычный", "ВПИ", "Новичок"]
 GENDER_OPTIONS = ["M", "F"]
+AUTH_KEY = "authenticated"
+PASSWORD_KEY = "app_password"
+
+# Default password (can be overridden via environment variable)
+DEFAULT_PASSWORD = "groupmaker2024"
+APP_PASSWORD = os.environ.get("APP_PASSWORD", DEFAULT_PASSWORD)
+
+
+def check_password() -> bool:
+    """Check if the correct password has been entered.
+    
+    Returns True if authenticated, False otherwise.
+    """
+    # Initialize auth state if not present
+    if AUTH_KEY not in st.session_state:
+        st.session_state[AUTH_KEY] = False
+    
+    # If already authenticated, return True
+    if st.session_state[AUTH_KEY]:
+        return True
+    
+    # Show password input form
+    st.markdown("### 🔐 Введите пароль для доступа")
+    
+    password_input = st.text_input(
+        "Пароль",
+        type="password",
+        key="password_input",
+        placeholder="Введите пароль приложения"
+    )
+    
+    if st.button("Войти"):
+        # Hash both passwords for secure comparison
+        input_hash = hashlib.sha256(password_input.encode()).hexdigest()
+        correct_hash = hashlib.sha256(APP_PASSWORD.encode()).hexdigest()
+        
+        if input_hash == correct_hash:
+            st.session_state[AUTH_KEY] = True
+            st.success("✅ Успешный вход!")
+            st.rerun()
+        else:
+            st.error("❌ Неверный пароль")
+    
+    return False
 
 
 def initialize_session_state() -> None:
     """Initialize session state with default DataFrame if not present."""
+    if AUTH_KEY not in st.session_state:
+        st.session_state[AUTH_KEY] = False
     if DATA_KEY not in st.session_state or not isinstance(
         st.session_state.get(DATA_KEY), pd.DataFrame
     ):
@@ -231,6 +277,22 @@ def main():
     """Main application entry point."""
     # Initialize session state
     initialize_session_state()
+    
+    # Check password authentication
+    if not check_password():
+        st.info("🔒 Приложение защищено паролем. Пожалуйста, введите пароль для доступа.")
+        return
+    
+    # Show title only after authentication
+    st.title("🔥 РАСХОДИМСЯ ПО ГРУППАМ!")
+    
+    # Add logout button in sidebar
+    with st.sidebar:
+        st.markdown("### 🔐 Безопасность")
+        if st.button("Выйти", key="logout_btn"):
+            st.session_state[AUTH_KEY] = False
+            st.rerun()
+        st.markdown("---")
     
     # Check for missing API key and show warning
     if not get_namsor_api_key():
