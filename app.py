@@ -105,7 +105,7 @@ def get_current_dataframe() -> pd.DataFrame:
     return st.session_state.get(DATA_KEY, pd.DataFrame(columns=DEFAULT_COLUMNS))
 
 
-def add_bulk_names(names_text: str) -> tuple[bool, str]:
+def add_bulk_names(names_text: str, progress_bar=None) -> tuple[bool, str]:
     """Add multiple names from text input.
     
     Returns:
@@ -123,11 +123,13 @@ def add_bulk_names(names_text: str) -> tuple[bool, str]:
     if not to_add:
         return False, "Все имена уже есть в таблице."
     
-    # Detect genders and statuses
+    # Detect genders and statuses with progress bar
     genders = []
     statuses = []
     debug_messages = []
-    for name in to_add:
+    total_names = len(to_add)
+    
+    for i, name in enumerate(to_add, 1):
         gender_result, success, debug_msg, request_details = detect_gender(name)
         genders.append(gender_result)
         if success:
@@ -142,6 +144,10 @@ def add_bulk_names(names_text: str) -> tuple[bool, str]:
             "success": success,
             "request_details": request_details
         })
+        
+        # Update progress bar if provided
+        if progress_bar is not None:
+            progress_bar.progress(i / total_names, text=f"Обработка имени {i}/{total_names}: {name}")
     
     new_rows = pd.DataFrame({
         "Имя": to_add,
@@ -157,22 +163,23 @@ def add_bulk_names(names_text: str) -> tuple[bool, str]:
     return True, f"✅ Добавлено: {len(to_add)}"
 
 
-def auto_detect_genders() -> None:
+def auto_detect_genders(progress_bar=None) -> None:
     """Auto-detect gender for all participants."""
     df = get_current_dataframe().copy()
     if df.empty:
         return
     
-    # Process each row to get gender, success status, and debug message
-    results = df["Имя"].astype(str).apply(detect_gender)
-    df["Пол"] = results.apply(lambda x: x[0])
+    total_names = len(df)
     
-    # Collect debug messages
+    # Process each row to get gender, success status, and debug message
+    genders = []
+    statuses = []
     debug_messages = []
     
-    # Set status based on whether Namsor successfully detected the gender
-    def get_status_and_debug(name):
+    for i, name in enumerate(df["Имя"].astype(str), 1):
         _, success, debug_msg, request_details = detect_gender(name)
+        genders.append(_[0] if isinstance(_, tuple) else _)
+        
         # Add to global debug log with full request/response details
         st.session_state["namsor_debug_log"].append({
             "name": name, 
@@ -180,14 +187,20 @@ def auto_detect_genders() -> None:
             "success": success,
             "request_details": request_details
         })
+        
         if success:
-            return ("Пол определён через ИИ", debug_msg)
+            statuses.append("Пол определён через ИИ")
         else:
-            return ("🔴 Не удалось определить пол", debug_msg)
+            statuses.append("🔴 Не удалось определить пол")
+        
+        debug_messages.append(debug_msg)
+        
+        # Update progress bar if provided
+        if progress_bar is not None:
+            progress_bar.progress(i / total_names, text=f"Обработка имени {i}/{total_names}: {name}")
     
-    status_results = df["Имя"].apply(get_status_and_debug)
-    df["🚦 Статус"] = status_results.apply(lambda x: x[0])
-    debug_messages = status_results.apply(lambda x: x[1]).tolist()
+    df["Пол"] = [g[0] if isinstance(g, tuple) else g for g in genders]
+    df["🚦 Статус"] = statuses
     
     st.session_state[DATA_KEY] = df
     if WIDGET_KEY in st.session_state:
@@ -309,17 +322,29 @@ def main():
             "Вставьте список имён (каждое с новой строки)", height=80
         )
         if st.button("➕ Добавить в таблицу", width="stretch"):
-            success, message = add_bulk_names(bulk_text)
-            if success:
-                st.success(message)
-                st.rerun()
+            # Show progress bar for bulk import
+            if bulk_text.strip():
+                progress_bar = st.progress(0, text="Начало обработки...")
+                success, message = add_bulk_names(bulk_text, progress_bar=progress_bar)
+                progress_bar.empty()  # Clear progress bar after completion
+                if success:
+                    st.success(message)
+                    st.rerun()
+                else:
+                    st.warning(message)
             else:
-                st.warning(message)
+                st.warning("Введите имена для добавления.")
     
-    # Auto-detect gender button
+    # Auto-detect gender button with progress bar
     if st.button("🔍 Авто-определить пол у всех", type="secondary", width="stretch"):
-        auto_detect_genders()
-        st.rerun()
+        current_df = get_current_dataframe()
+        if not current_df.empty:
+            progress_bar = st.progress(0, text="Начало обработки...")
+            auto_detect_genders(progress_bar=progress_bar)
+            progress_bar.empty()  # Clear progress bar after completion
+            st.rerun()
+        else:
+            st.warning("Таблица пуста. Добавьте резидентов для определения пола.")
     
     # Warning for unrecognized names
     current_df = st.session_state[DATA_KEY]

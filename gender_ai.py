@@ -3,7 +3,7 @@
 
 import os
 import re
-from typing import Literal, Optional, Tuple
+from typing import Literal, Optional, Tuple, Callable
 from urllib.parse import quote
 import requests
 
@@ -32,11 +32,12 @@ def extract_first_name(name: str) -> str:
     return name.strip().split()[0].lower().rstrip(".,!?:;")
 
 
-def detect_gender_by_namsor(name: str) -> Tuple[Optional[Gender], Optional[str], dict]:
+def detect_gender_by_namsor(name: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[Optional[Gender], Optional[str], dict]:
     """Detect gender using the Namsor API.
     
     Args:
         name: First name or full name
+        progress_callback: Optional callback function(current, total) for progress tracking
         
     Returns:
         Tuple of (gender, debug_message, request_details):
@@ -111,11 +112,12 @@ def detect_gender_by_namsor(name: str) -> Tuple[Optional[Gender], Optional[str],
         return (None, f"❌ Namsor: непредвиденная ошибка ({str(e)})", request_details)
 
 
-def detect_gender(name: str) -> Tuple[Gender, bool, str, dict]:
+def detect_gender(name: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[Gender, bool, str, dict]:
     """Detect gender by the first name using Namsor AI API.
     
     Args:
         name: Full name or first name
+        progress_callback: Optional callback function(current, total) for progress tracking
         
     Returns:
         Tuple of (gender, success, debug_message, request_details):
@@ -145,7 +147,7 @@ def detect_gender(name: str) -> Tuple[Gender, bool, str, dict]:
     
     first_name = extract_first_name(name)
     
-    gender, debug_msg, request_details = detect_gender_by_namsor(first_name)
+    gender, debug_msg, request_details = detect_gender_by_namsor(first_name, progress_callback)
     
     if gender is None:
         # Default to 'M' if API fails or returns unknown gender
