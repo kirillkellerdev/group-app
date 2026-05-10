@@ -126,6 +126,8 @@ class GroupingResult:
     warnings: list[str]
     used_seed: int
     balance_metrics: dict = field(default_factory=dict)
+    strategy_used: str = "balanced"
+    configuration_summary: dict = field(default_factory=dict)
 
 
 def verify_groups(
@@ -259,10 +261,46 @@ def _run_attempt(seed: int, config: dict) -> Optional[GroupingResult]:
     strict_r = config['strict_r']
     strict_g = config['strict_g']
     num_groups = config['g_num']
+    strategy = config.get('strategy', 'balanced')
+    mix_intensity = config.get('mix_intensity', 5)
+    newbies = config.get('newbies', [])
+    experts = config.get('experts', [])
     
-    # Sort by number of conflicts (most constrained first)
-    pool = sorted(all_people, key=lambda p: len(conflicts[p]), reverse=True)
-    rng.shuffle(pool)
+    # Strategy-specific pool ordering
+    pool = list(all_people)
+    
+    if strategy == "random":
+        # Pure random - just shuffle
+        rng.shuffle(pool)
+        # For random strategy, disable strict balance
+        strict_r_local = False
+        strict_g_local = False
+    elif strategy == "newbie_friendly":
+        # Put newbies first so they get distributed evenly
+        newbie_set = set(newbies)
+        newbies_in_pool = [p for p in pool if p in newbie_set]
+        others = [p for p in pool if p not in newbie_set]
+        rng.shuffle(newbies_in_pool)
+        rng.shuffle(others)
+        pool = newbies_in_pool + others
+        strict_r_local = strict_r
+        strict_g_local = strict_g
+    elif strategy == "expert_lead":
+        # Put experts first to ensure each group gets one
+        expert_set = set(experts)
+        experts_in_pool = [p for p in pool if p in expert_set]
+        others = [p for p in pool if p not in expert_set]
+        rng.shuffle(experts_in_pool)
+        rng.shuffle(others)
+        pool = experts_in_pool + others
+        strict_r_local = strict_r
+        strict_g_local = strict_g
+    else:  # balanced
+        # Sort by number of conflicts (most constrained first)
+        pool = sorted(all_people, key=lambda p: len(conflicts[p]), reverse=True)
+        rng.shuffle(pool)
+        strict_r_local = strict_r
+        strict_g_local = strict_g
     
     # Initialize groups and counters
     groups = [[] for _ in range(num_groups)]
@@ -287,18 +325,27 @@ def _run_attempt(seed: int, config: dict) -> Optional[GroupingResult]:
         role = roles[person]
         gender = genders[person]
         
-        # Find valid groups
-        valid_groups = [
-            i for i in range(num_groups)
-            if len(groups[i]) < size_targets[i]
-            and (not strict_r or group_role_counts[i][role] < role_targets[role][i])
-            and (not strict_g or group_gender_counts[i][gender] < gender_targets[gender][i])
-            and not any(person in conflicts[member] for member in groups[i])
-            and check_multi_member_constraints(i, person)
-        ]
+        # For random strategy, skip balance checks
+        if strategy == "random":
+            valid_groups = [
+                i for i in range(num_groups)
+                if len(groups[i]) < size_targets[i]
+                and not any(person in conflicts[member] for member in groups[i])
+                and check_multi_member_constraints(i, person)
+            ]
+        else:
+            # Find valid groups with balance constraints
+            valid_groups = [
+                i for i in range(num_groups)
+                if len(groups[i]) < size_targets[i]
+                and (not strict_r_local or group_role_counts[i][role] < role_targets[role][i])
+                and (not strict_g_local or group_gender_counts[i][gender] < gender_targets[gender][i])
+                and not any(person in conflicts[member] for member in groups[i])
+                and check_multi_member_constraints(i, person)
+            ]
         
         # Relax constraints if needed
-        if not valid_groups and (strict_r or strict_g):
+        if not valid_groups and (strict_r_local or strict_g_local):
             valid_groups = [
                 i for i in range(num_groups)
                 if len(groups[i]) < size_targets[i]
@@ -318,105 +365,111 @@ def _run_attempt(seed: int, config: dict) -> Optional[GroupingResult]:
         group_gender_counts[idx][gender] += 1
     
     # Local optimization: swap participants to improve balance
-    def calculate_score():
-        role_deviation = sum(
-            sum(abs(group_role_counts[i][role] - role_targets[role][i]) for role in role_targets)
-            for i in range(num_groups)
-        )
-        gender_deviation = sum(
-            sum(abs(group_gender_counts[i][gender] - gender_targets[gender][i]) for gender in gender_targets)
-            for i in range(num_groups)
-        )
-        return role_deviation + gender_deviation
-    
-    best_score = calculate_score()
-    stagnation_counter = 0
-    
-    for _ in range(150):
-        if stagnation_counter >= 25:
-            break
+    # Skip optimization for random strategy
+    if strategy != "random":
+        # Adjust iterations based on mix_intensity
+        max_iterations = int(150 * (mix_intensity / 5))
+        stagnation_limit = int(25 * (mix_intensity / 5))
         
-        g1, g2 = rng.sample(range(num_groups), 2)
-        if not groups[g1] or not groups[g2]:
-            continue
+        def calculate_score():
+            role_deviation = sum(
+                sum(abs(group_role_counts[i][role] - role_targets[role][i]) for role in role_targets)
+                for i in range(num_groups)
+            )
+            gender_deviation = sum(
+                sum(abs(group_gender_counts[i][gender] - gender_targets[gender][i]) for gender in gender_targets)
+                for i in range(num_groups)
+            )
+            return role_deviation + gender_deviation
         
-        p1, p2 = rng.choice(groups[g1]), rng.choice(groups[g2])
-        r1, r2 = roles[p1], roles[p2]
-        gn1, gn2 = genders[p1], genders[p2]
+        best_score = calculate_score()
+        stagnation_counter = 0
         
-        # Check conflict constraints after swap
-        if any(p1 in conflicts[m] for m in groups[g2] if m != p2):
-            continue
-        if any(p2 in conflicts[m] for m in groups[g1] if m != p1):
-            continue
-        
-        # Check multi-member constraints after swap
-        def would_violate_multi_member(group_idx: int, person: str) -> bool:
-            group_set = set(groups[group_idx])
-            group_set.discard(p1 if group_idx == g1 else p2)
-            group_set.add(person)
-            for constraint in limit_constraints:
-                if constraint.is_violated_by(group_set):
-                    return True
-            return False
-        
-        if would_violate_multi_member(g2, p1):
-            continue
-        if would_violate_multi_member(g1, p2):
-            continue
-        
-        # Check role/gender capacity constraints
-        if strict_r and (group_role_counts[g2][r1] + 1 > role_targets[r1][g2] 
-                         or group_role_counts[g1][r2] + 1 > role_targets[r2][g1]):
-            continue
-        if strict_g and (group_gender_counts[g2][gn1] + 1 > gender_targets[gn1][g2] 
-                         or group_gender_counts[g1][gn2] + 1 > gender_targets[gn2][g1]):
-            continue
-        
-        # Perform swap
-        groups[g1].remove(p1)
-        groups[g1].append(p2)
-        groups[g2].remove(p2)
-        groups[g2].append(p1)
-        
-        group_role_counts[g1][r1] -= 1
-        group_role_counts[g1][r2] += 1
-        group_role_counts[g2][r2] -= 1
-        group_role_counts[g2][r1] += 1
-        
-        group_gender_counts[g1][gn1] -= 1
-        group_gender_counts[g1][gn2] += 1
-        group_gender_counts[g2][gn2] -= 1
-        group_gender_counts[g2][gn1] += 1
-        
-        new_score = calculate_score()
-        
-        if new_score < best_score:
-            best_score = new_score
-            stagnation_counter = 0
-        elif new_score == best_score:
-            if rng.random() < 0.1:
-                rng.shuffle(groups)
+        for _ in range(max_iterations):
+            if stagnation_counter >= stagnation_limit:
+                break
+            
+            g1, g2 = rng.sample(range(num_groups), 2)
+            if not groups[g1] or not groups[g2]:
+                continue
+            
+            p1, p2 = rng.choice(groups[g1]), rng.choice(groups[g2])
+            r1, r2 = roles[p1], roles[p2]
+            gn1, gn2 = genders[p1], genders[p2]
+            
+            # Check conflict constraints after swap
+            if any(p1 in conflicts[m] for m in groups[g2] if m != p2):
+                continue
+            if any(p2 in conflicts[m] for m in groups[g1] if m != p1):
+                continue
+            
+            # Check multi-member constraints after swap
+            def would_violate_multi_member(group_idx: int, person: str) -> bool:
+                group_set = set(groups[group_idx])
+                group_set.discard(p1 if group_idx == g1 else p2)
+                group_set.add(person)
+                for constraint in limit_constraints:
+                    if constraint.is_violated_by(group_set):
+                        return True
+                return False
+            
+            if would_violate_multi_member(g2, p1):
+                continue
+            if would_violate_multi_member(g1, p2):
+                continue
+            
+            # Check role/gender capacity constraints
+            if strict_r_local and (group_role_counts[g2][r1] + 1 > role_targets[r1][g2] 
+                             or group_role_counts[g1][r2] + 1 > role_targets[r2][g1]):
+                continue
+            if strict_g_local and (group_gender_counts[g2][gn1] + 1 > gender_targets[gn1][g2] 
+                             or group_gender_counts[g1][gn2] + 1 > gender_targets[gn2][g1]):
+                continue
+            
+            # Perform swap
+            groups[g1].remove(p1)
+            groups[g1].append(p2)
+            groups[g2].remove(p2)
+            groups[g2].append(p1)
+            
+            group_role_counts[g1][r1] -= 1
+            group_role_counts[g1][r2] += 1
+            group_role_counts[g2][r2] -= 1
+            group_role_counts[g2][r1] += 1
+            
+            group_gender_counts[g1][gn1] -= 1
+            group_gender_counts[g1][gn2] += 1
+            group_gender_counts[g2][gn2] -= 1
+            group_gender_counts[g2][gn1] += 1
+            
+            new_score = calculate_score()
+            
+            if new_score < best_score:
+                best_score = new_score
+                stagnation_counter = 0
+            elif new_score == best_score:
+                if rng.random() < 0.1:
+                    rng.shuffle(groups)
+                else:
+                    stagnation_counter += 1
             else:
+                # Revert swap
+                groups[g1].remove(p2)
+                groups[g1].append(p1)
+                groups[g2].remove(p1)
+                groups[g2].append(p2)
+                
+                group_role_counts[g1][r1] += 1
+                group_role_counts[g1][r2] -= 1
+                group_role_counts[g2][r2] += 1
+                group_role_counts[g2][r1] -= 1
+                
+                group_gender_counts[g1][gn1] += 1
+                group_gender_counts[g1][gn2] -= 1
+                group_gender_counts[g2][gn2] += 1
+                group_gender_counts[g2][gn1] -= 1
+                
                 stagnation_counter += 1
-        else:
-            # Revert swap
-            groups[g1].remove(p2)
-            groups[g1].append(p1)
-            groups[g2].remove(p1)
-            groups[g2].append(p2)
-            
-            group_role_counts[g1][r1] += 1
-            group_role_counts[g1][r2] -= 1
-            group_role_counts[g2][r2] += 1
-            group_role_counts[g2][r1] -= 1
-            
-            group_gender_counts[g1][gn1] += 1
-            group_gender_counts[g1][gn2] -= 1
-            group_gender_counts[g2][gn2] += 1
-            group_gender_counts[g2][gn1] -= 1
-            
-            stagnation_counter += 1
     
     # Calculate balance metrics
     balance_metrics = {
@@ -454,6 +507,8 @@ def generate_groups(
     strict_g: bool = True,
     max_attempts: int = 500,
     workers: int = 0,
+    strategy: Literal["balanced", "random", "newbie_friendly", "expert_lead"] = "balanced",
+    mix_intensity: int = 5,
 ) -> GroupingResult:
     """Generate balanced groups from participants.
     
@@ -473,6 +528,12 @@ def generate_groups(
         strict_g: Whether to enforce strict gender balance
         max_attempts: Maximum number of generation attempts
         workers: Number of parallel workers (0 for single-threaded)
+        strategy: Generation strategy:
+            - "balanced": Default balanced distribution (role/gender/size)
+            - "random": Pure random assignment (ignores role/gender balance)
+            - "newbie_friendly": Prioritizes spreading newbies evenly with expert support
+            - "expert_lead": Each group gets at least one expert if possible
+        mix_intensity: How aggressively to mix participants (1-10, higher = more mixing attempts)
         
     Returns:
         GroupingResult containing the generated groups and metadata
@@ -552,8 +613,19 @@ def generate_groups(
     max_size = base_size + (1 if extra > 0 else 0)
     
     # Validate conflicts don't exceed max group size
+    # Only check pairwise conflicts from legacy dict format or simple pairs
+    # For multi-member constraints (>2 members), the constraint itself handles distribution
     for person, conflict_list in conflicts.items():
-        if len(conflict_list) >= max_size:
+        # Check if this is a simple pairwise conflict (not part of a larger multi-member constraint)
+        # We only raise error if ALL conflicts for this person are true pairwise conflicts
+        is_pure_pairwise = True
+        for constraint in limit_constraints:
+            if person in constraint.members and len(constraint.members) > 2:
+                # This person is part of a multi-member constraint, skip strict validation
+                is_pure_pairwise = False
+                break
+        
+        if is_pure_pairwise and len(conflict_list) >= max_size:
             raise RuntimeError(
                 f"Конфликт '{person}' ({len(conflict_list)}) > макс. размера группы ({max_size})."
             )
@@ -592,6 +664,10 @@ def generate_groups(
         'strict_r': strict_r,
         'strict_g': strict_g,
         'g_num': n,
+        'strategy': strategy,
+        'mix_intensity': mix_intensity,
+        'newbies': newbies or [],
+        'experts': experts or [],
     }
     
     # Generate seeds for attempts
@@ -605,12 +681,30 @@ def generate_groups(
                 result = future.result()
                 if result:
                     result.attempts = futures[future] + 1
+                    result.strategy_used = strategy
+                    result.configuration_summary = {
+                        'num_groups': n,
+                        'total_participants': len(all_people),
+                        'num_experts': len(experts or []),
+                        'num_newbies': len(newbies or []),
+                        'strict_roles': strict_r,
+                        'strict_genders': strict_g,
+                    }
                     return result
     else:
         for i, s in enumerate(seeds):
             result = _run_attempt(s, config)
             if result:
                 result.attempts = i + 1
+                result.strategy_used = strategy
+                result.configuration_summary = {
+                    'num_groups': n,
+                    'total_participants': len(all_people),
+                    'num_experts': len(experts or []),
+                    'num_newbies': len(newbies or []),
+                    'strict_roles': strict_r,
+                    'strict_genders': strict_g,
+                }
                 return result
     
     raise RuntimeError(f"Сборка не удалась за {max_attempts} попыток. Seed: {used_seed}")

@@ -278,11 +278,45 @@ def render_resident_table() -> pd.DataFrame:
 def render_generation_settings() -> dict:
     """Render generation settings and return values."""
     with st.expander("⚙️ Настройки генерации"):
+        col1, col2 = st.columns(2)
+        with col1:
+            num_groups = st.number_input("Количество групп", min_value=1, value=2)
+            strategy = st.selectbox(
+                "Стратегия распределения",
+                options=["balanced", "random", "newbie_friendly", "expert_lead"],
+                format_func=lambda x: {
+                    "balanced": "🎯 Сбалансированная (по умолчанию)",
+                    "random": "🎲 Случайная",
+                    "newbie_friendly": "🌱 Дружелюбная к новичкам",
+                    "expert_lead": "⭐ Под руководством экспертов"
+                }[x],
+                help="""
+- **Сбалансированная**: Равномерное распределение по ролям, полу и размеру групп
+- **Случайная**: Полностью случайное распределение (игнорирует баланс ролей/полов)
+- **Дружелюбная к новичкам**: Новички равномерно распределяются с поддержкой экспертов
+- **Под руководством экспертов**: Каждая группа получает хотя бы одного эксперта
+                """
+            )
+        with col2:
+            strict_roles = st.checkbox("Строгий баланс ролей", value=True)
+            strict_genders = st.checkbox("Строгий баланс полов", value=True)
+            mix_intensity = st.slider(
+                "Интенсивность перемешивания",
+                min_value=1,
+                max_value=10,
+                value=5,
+                help="Чем выше значение, тем больше попыток оптимизации баланса (влияет на время генерации)"
+            )
+        
+        seed = st.number_input("Seed (опционально)", value=None, step=1)
+        
         return {
-            "num_groups": st.number_input("Количество групп", min_value=1, value=2),
-            "strict_roles": st.checkbox("Строгий баланс ролей", value=True),
-            "strict_genders": st.checkbox("Строгий баланс полов", value=True),
-            "seed": st.number_input("Seed (опционально)", value=None, step=1),
+            "num_groups": num_groups,
+            "strict_roles": strict_roles,
+            "strict_genders": strict_genders,
+            "seed": seed,
+            "strategy": strategy,
+            "mix_intensity": mix_intensity,
         }
 
 
@@ -470,10 +504,18 @@ def main():
                 seed=int(settings["seed"]) if settings["seed"] else None,
                 strict_r=settings["strict_roles"],
                 strict_g=settings["strict_genders"],
+                strategy=settings["strategy"],
+                mix_intensity=settings["mix_intensity"],
             )
             
-            # Display results
-            st.success(f"✅ Seed: {result.used_seed} | Попыток: {result.attempts}")
+            # Display results with strategy info
+            strategy_names = {
+                "balanced": "🎯 Сбалансированная",
+                "random": "🎲 Случайная",
+                "newbie_friendly": "🌱 Дружелюбная к новичкам",
+                "expert_lead": "⭐ Под руководством экспертов"
+            }
+            st.success(f"✅ Seed: {result.used_seed} | Попыток: {result.attempts} | Стратегия: {strategy_names.get(result.strategy_used, result.strategy_used)}")
             if result.warnings:
                 st.warning("⚠️ " + "; ".join(result.warnings))
             
